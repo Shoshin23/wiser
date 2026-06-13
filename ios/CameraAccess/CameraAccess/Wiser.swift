@@ -365,6 +365,7 @@ final class WiserViewModel {
   /// `.onTap` below still mirrors the same control as a fallback for an off-center tap.
   private func sendCard(title: String, body: String, control: CardControl = .none) async {
     guard let display else { return }
+    WiserMirror.shared.publish(title: title, body: body, kind: control == .stop ? "running" : "info")
     let button = controlButton(for: control)
     do {
       try await display.send(
@@ -396,6 +397,7 @@ final class WiserViewModel {
   /// emitted FIRST (implicit cursor lands on it); whole-card `.onTap` mirrors Ask again.
   private func sendAnswerCard(title: String, body: String) async {
     guard let display else { return }
+    WiserMirror.shared.publish(title: title, body: body, kind: "done")
     let againButton = MWDATDisplay.Button(
       label: "Ask again",
       style: .primary,
