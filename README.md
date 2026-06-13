@@ -1,6 +1,8 @@
 <div align="center">
 
-<img src="media/wiser-demo.gif" width="460" alt="wiser — a fleet of coding agents on the 600×600 glasses lens, built hands-free at ~1/16 the cost of an Opus run" />
+<video src="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4" width="640" autoplay loop muted playsinline controls></video>
+
+https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4
 
 # wiser
 
@@ -8,7 +10,7 @@
 
 *Voice-driven Claude agents, surfaced as glanceable cards on Meta Ray-Ban Display glasses.*
 
-<sub>↑ the actual 600×600 lens · <a href="media/wiser-demo.mp4">watch the MP4</a></sub>
+<sub>↑ the lens, in your field of view · <a href="media/wiser-demo-glasses.mp4">download the MP4</a></sub>
 
 </div>
 
@@ -118,9 +120,28 @@ It's a real loop, not a one-shot prompt:
 
 ## Evidence
 
-Cost–quality is the thesis, so we measure it: an offline harness runs each task three ways
-(baseline · best-of-N · +1 human steer) against a pytest verifier, plus an agent-driven perf loop on a real
-OSS target. **Methodology and live results: [`EVIDENCE.md`](./EVIDENCE.md)** _(run in progress)._
+The thesis is that the *one* in-loop message a human supplies is what unlocks the work. So we measured it: an
+offline harness runs public coding benchmarks three ways against a hermetic pytest/exec verifier —
+**baseline** (one blind shot) · **+ machine retry** (the test output, fed back) · **+ one steer** (a crafted
+human-style correction) — sharing a single attempt-1 so the only variable is the injected message.
+
+**Headline: a single mid-loop message takes a cheap agent from ~0% to ~90%.** The agent can do the work; it
+just needs one correction.
+
+| Benchmark (solver = Haiku 4.5) | blind baseline | + one in-loop message |
+|---|---|---|
+| HumanEval (n=12) | **0 / 12** | **11 / 12** |
+| Aider polyglot, Python (n=9) | 2 / 9 | 6 / 9 |
+
+**Honest caveat — you can't really run a "clean" bench for this.** Two reasons. (1) These benchmarks are in
+every model's training set and are easy to game, so absolute scores measure memorization as much as skill — a
+"real" number would need a held-out, uncontaminated task set we don't have. (2) On benchmarks with crisp,
+descriptive test output, a generic machine retry does about as well as a hand-crafted human steer (retry 11/12
+vs steer 8/12 on HumanEval) — the steer's *unique* value only shows up on information-bound failures (wrong
+approach, where the tests say *that* you're wrong but not *why*) with a solver capable enough to act on the
+fix. So read the table as evidence for **"one in-loop touch closes the gap,"** not as a leaderboard claim.
+
+**Methodology, the harness (`backend/src/eval/`), and full per-instance logs: [`EVIDENCE.md`](./EVIDENCE.md).**
 
 ---
 
