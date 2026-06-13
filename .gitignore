@@ -1,0 +1,5 @@
+# Private — contributor bios / PII, kept local only, never committed
+.claude/skills/team/
+*.local.md
+.env
+.dev.vars
