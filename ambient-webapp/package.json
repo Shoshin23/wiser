@@ -1,0 +1,18 @@
+{
+  "name": "wiser-ambient-webapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "wiser ambient opportunity cards — live transcription + background Haiku scanner surfaced as dreamy cards. Prototype-first; ports to the glasses later.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "groq-sdk": "^0.36.0"
+  }
+}

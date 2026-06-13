@@ -174,6 +174,8 @@ final class StreamSessionViewModel {
     stream = newStream
     streamingStatus = .waiting
     setupListeners(for: newStream)
+    // Laptop mirror: tee the camera POV + cards to an on-phone web server.
+    WiserMirror.shared.start()
     DATLog.log.notice("[Stream] stream created — calling start()")
     await newStream.start()
 
@@ -246,7 +248,12 @@ final class StreamSessionViewModel {
   /// Status card rendered on the glasses lens while streaming. `Text` is
   /// qualified to MWDATDisplay so it doesn't collide with SwiftUI.Text here.
   private func statusCard() -> FlexBox {
-    FlexBox(direction: .column, spacing: 12) {
+    WiserMirror.shared.publish(
+      title: "CameraAccess",
+      body: "Streaming live from your glasses",
+      kind: "running"
+    )
+    return FlexBox(direction: .column, spacing: 12) {
       MWDATDisplay.Text("CameraAccess", style: .heading)
       MWDATDisplay.Text("Streaming live from your glasses", style: .body, color: .secondary)
       MWDATDisplay.Text("Tap the shutter on your phone to capture a photo", style: .meta, color: .secondary)
@@ -277,6 +284,7 @@ final class StreamSessionViewModel {
   private func handleVideoFrame(_ frame: VideoFrame) {
     if let image = frame.makeUIImage() {
       currentVideoFrame = image
+      WiserMirror.shared.publish(frame: image)
       if !hasReceivedFirstFrame {
         hasReceivedFirstFrame = true
         DATLog.log.notice("[Stream] received FIRST video frame ✅")
