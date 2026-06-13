@@ -1,68 +1,154 @@
-# wiser — glasses webapp + agent backend
+<div align="center">
 
-Voice-driven Claude managed agents, surfaced as cards on Meta Ray-Ban **Display** glasses.
+<img src="media/wiser-demo.gif" width="460" alt="wiser demo — building a small issue tracker hands-free, on the glasses lens" />
+
+# wiser
+
+**A fleet of coding agents that lives in front of you — always there, never in the way.**
+
+*Voice-driven Claude agents, surfaced as glanceable cards on Meta Ray-Ban Display glasses.*
+
+<sub>↑ the actual 600×600 lens · <a href="media/wiser-demo.mp4">watch the MP4</a></sub>
+
+</div>
+
+---
+
+## The idea
+
+Picture coding agents you never *open* — you just *have* them. Always on, like a colleague who's around all
+day, building while you get on with your life.
+
+Boris Cherny, who built Claude Code, imagines a near future *"where anyone can just build software anytime."*
+When that arrives, the agent stops being an app. It's just there, in the room with you.
+
+Wonderful, and a little terrifying — an agent that's always there is one that can always interrupt you. So
+here's the question wiser is built around:
+
+> **Can you keep a fleet of coding agents in front of you all day — and barely notice them until they need you?**
+
+You speak. A fleet of Claude agents goes off and writes the code, in silence.
+
+Everything they're doing — the diffs, the logs, the second-guessing — collapses into one calm line you can
+glance at and forget.
+
+They interrupt you once, for the single call only you can make. You flick your fingers, and they finish.
+
+Agents everywhere. Attention almost nowhere.
+
+---
+
+## What it does
+
+- 🎙 **Start work by voice.** Just say what you want — no editor, no keyboard. A fleet of agents spins up.
+- 👓 **Lives on your glasses.** Cards render on the Ray-Ban Display; you steer with the Neural Band (6 gestures) + voice.
+- 🤫 **Glanceable, not streaming.** The agents' work collapses to one calm statusline. You glance — you don't read.
+- ✋ **Interrupts you once.** It surfaces only the decisions you alone can make. Approve or steer with a flick.
+- ⚡ **A fleet, not a bot.** Many cheap agents run in parallel, verifier-gated — the best *correct* result wins.
+- 💸 **Cheap by design.** A small Nemotron model does the compression; a task can land at ~1/16 the cost of one top-tier run.
+
+---
+
+## The hard part: saying less
+
+An agent at work throws off a flood — diffs, logs, reasoning, tool calls. The lens shows almost none of it:
+**600×600, one view, no scrolling, a few words.**
+
+So the whole game is throwing away the noise and keeping only what you need to see or decide. Three channels,
+each tiny:
+
+- **A card** — one line. A decision, an approval, a blocker. Nothing else.
+- **Voice** — the glasses talk, you talk back. That's where the detail lives.
+- **Gesture** — six moves on the Neural Band (four swipes, two pinches): approve, reject, drill in, next,
+  ask. That's the whole vocabulary.
+
+A small, fast model (NVIDIA **Nemotron**) does the squeezing — so compression is our cost story and our calm
+story at once.
+
+**Glasses-first rule:** if it's not on the lens, it's not done. The phone holds the logic, secrets, and
+state; the interaction and the output happen on the glasses.
+
+---
+
+## The demo — a day in the life
+
+1. **You just say it:** *"Hey wiser — build us a quick issue tracker, a small Linear."* A fleet spins up; you walk away.
+2. **It works silently.** One line at the bottom rolls the present tense (`scaffolding · building IssueList · running tests`). No feed to babysit.
+3. **Work catches itself.** In a meeting later, wiser offers: *"capture 'add SSO for the launch' as an issue?"* One pinch — filed into the tracker still being built.
+4. **The one interruption that matters:** *"keep issues local, or sync a real backend?"* One gesture, and it continues. That's the morning's *only* interruption.
+5. **The result:** a working tracker, with your captured issue as ticket #1 — built hands-free for ~4¢, roughly **1/16** the cost of one top-tier agent run.
+
+---
+
+## How it works
 
 ```
- Glasses webapp (600×600)            Backend orchestrator (Node/TS)         Cloud
- ┌───────────────────────┐  audio    ┌──────────────────────────────┐
- │ record mic on D-pad ──┼──(+image)─▶ /api/ask                      │
- │ capture camera frame  │           │   Groq STT  ──────────────────┼──▶ Groq Whisper
- │ render result CARD     │           │   Claude Agent SDK query() ───┼──▶ Anthropic
- │ play TTS audio chunks ◀┼──JSON─────┤   Groq TTS (chunked) ─────────┼──▶ Groq Orpheus
- └───────────────────────┘           └──────────────────────────────┘
-        STT → prompt → managed agent → response → TTS   (text + image flows)
+ voice intent ─▶ orchestrator ─▶ fleet of Claude agents ─▶ raw results ─▶ Nemotron distiller ─▶ cards ─▶ lens
+       ▲                              │  (parallel, verifier-gated)                                      │
+       └──────────────  you steer / approve / clarify (gesture + voice)  ◀──────────────────────────────┘
 ```
 
-## Layout
+It's a real loop, not a one-shot prompt. Agents write code; a **verifier** re-runs the tests and benchmarks;
+anything fast-but-wrong gets thrown out; it tries again until it's green.
+
+Run many cheap **Nemotron**/Haiku agents in parallel and let the verifier keep the best *correct* one. That's
+the bet: many cheap agents beating one expensive one.
+
+**Evidence track:** an agent-driven perf loop on a real OSS target —
+[`microsoft/llguidance`](https://github.com/microsoft/llguidance)'s `SimpleVob` token-mask bitset (the
+constrained-decoding hot path behind structured outputs in vLLM / llama.cpp; pure scalar today, ~8× SIMD
+headroom) — a clean `criterion` before/after, plus a *human-in-the-loop uplift* experiment (how much a public
+benchmark improves when the human gives exactly one steer mid-loop).
+
+---
+
+## Architecture
+
+Three loosely-coupled pieces, each buildable/demoable on its own:
 
 | Path | What |
 |------|------|
-| `ios/CameraAccess/` | **Native iOS DAT app — the real glasses client. ALL iOS work goes here.** Open `CameraAccess.xcodeproj`; the wiser flow is in `CameraAccess/Wiser.swift`. (Moved out of the `meta-display-experiments` repo — that copy is no longer used.) |
-| `firebase/` | Serverless backend the iOS app calls (Anthropic Messages API + Groq STT/TTS), deployed to `wiser-1a319` at `https://us-central1-wiser-1a319.cloudfunctions.net/wiser`. |
-| `backend/` | Node + TypeScript orchestrator (Claude Agent SDK). The local/LAN version of the pipeline. |
-| `glasses-webapp/` | Vanilla-JS Meta Display webapp — **deprecated**: the Display web SDK can't access camera/mic/audio, so the native iOS app is the glasses client. |
+| `ios/CameraAccess/` | **Native iOS DAT app — the real glasses client.** Camera + mic + on-lens display + voice (Meta Wearables DAT). Flow in `CameraAccess/Wiser.swift`. |
+| `backend/` | Node + TypeScript orchestrator (Claude Agent SDK): STT → agent → distill → TTS; serves cards/HUD over WebSocket. |
+| `firebase/` | Serverless backend the iOS app calls (Anthropic Messages API + Groq STT/TTS). |
+| `glasses-webapp/` | Vanilla-JS 600×600 lens app — the card-UI + interaction prototype (ambient + statusline + cards + voice), runnable in Chrome and on-device. |
 
-The frontend↔backend contract is `AskResponse` in `backend/src/types.ts` (`transcript`, `answer`, `audioChunks[]`, `card{title,summary}`). The `glasses-webapp` mirrors it.
+**The seam** is the card contract: agents emit results → the distiller normalizes them into
+`{kind, headline, one-liner, actions[]}` → the display renders the card + deep-dive. Define it early; it's
+what keeps the three pieces independent.
 
-## Run the backend
+---
+
+## Run it
+
+> Full setup, the cloud/STT/TTS pipeline, on-glasses deployment, and the contract live in
+> [`ONBOARDING.md`](./ONBOARDING.md).
 
 ```bash
-cd backend
-npm install
-cp .env.example .env        # then fill in GROQ_API_KEY and ANTHROPIC_API_KEY
-npm run dev                  # http://localhost:8787  (warms up the agent on boot)
+# Backend orchestrator
+cd backend && npm install
+cp .env.example .env          # fill in GROQ_API_KEY + ANTHROPIC_API_KEY
+npm run dev                   # http://localhost:8787
+
+# Glasses card-UI prototype (laptop demo path)
+cd glasses-webapp
+npm run demo                  # WISER_DEMO=true  → seeded run, no backend → http://localhost:3000
+npm run live                  # WISER_DEMO=false → live backend
 ```
 
-Quick checks:
-```bash
-npm run test:chunk          # TTS chunker logic (no keys needed)
-npm run smoke -- "what's the capital of France?"   # proves the Agent SDK path (needs ANTHROPIC_API_KEY)
-curl http://localhost:8787/api/health
-```
+In Chrome at ~600×600: arrows move focus · **Enter** activates · **Esc** goes back. *If it works with
+arrows + Enter in a 600×600 window, it works on the glasses.* On device, the iOS app is the real client; the
+webapp can also load on-lens via the Meta Wearables deep-link/QR over HTTPS.
 
-**Env:** `ANSWER_MODEL` defaults to `claude-sonnet-4-6` (chosen for voice latency). Groq model/voice ids are env-overridable in case they drift.
-
-## Run the webapp
-
-**Laptop (primary dev/demo path):**
-```bash
-cd glasses-webapp && npm start    # http://localhost:3000
-```
-Open in Chrome, set the window to ~600×600. `config.js` points at `http://localhost:8787` by default. Press **Ask** (or Enter on it) to record; press again to stop and send. **Ask + Image** grabs a camera frame first. **Type** is the keyboard fallback (hits `/api/ask-text`).
-
-**On the glasses:**
-1. Expose the local backend over HTTPS: `cloudflared tunnel --url http://localhost:8787` → copy the `https://….trycloudflare.com` URL into `glasses-webapp/config.js`.
-2. Deploy the static frontend (use the `meta-wearables-webapp:test-on-device` / `publish-to-vercel` skills — they also disable Vercel deployment protection so the glasses WebView isn't blocked).
-3. Load on-device via the `fb-viewapp://web_app_deep_link?appName=…&appUrl=https://…` deep link / QR.
-
-Both ends must be HTTPS (mixed content is blocked) — that's why the backend goes behind a tunnel.
-
-## Controls (D-pad)
-
-Arrow keys move focus · Enter activates · Escape goes back / cancels recording. The cyan ring shows focus.
+---
 
 ## Status
 
-Working: STT → managed agent → TTS pipeline (voice + image), result card + deep-dive, sequential audio playback, text fallback. Verified: chunker logic, typecheck, HTTP wiring, and the Agent SDK round-trip (subprocess spawns and responds).
+**Working:** voice → agent → voice pipeline (text + image); result card + deep-dive; the glasses-only card UI
+(ambient + statusline + cards + voice) with a seeded demo timeline and a zero-dep WebSocket reference backend.
 
-Deferred: streaming partial answers, gapless WAV concatenation, the smarter `card.ts` distiller (currently first-few-words), and the iOS DAT app. On-glasses `getUserMedia` (mic/camera) is unconfirmed — the laptop demo + Type fallback cover that risk.
+**In flight:** native iOS on-glass voice + display, the real Nemotron distiller (currently first-pass), live
+orchestrator wiring, and the perf-evidence track.
+
+Built at the **Whale** hackathon (Fiberplane / NP-Hard Ventures, Amsterdam) — judged on the *workflow*
+(visible agent loop, verifier agents, cost-quality, measurable before/after), not app polish.

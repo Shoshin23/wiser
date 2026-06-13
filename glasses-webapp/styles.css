@@ -220,7 +220,34 @@ body > #stage {
 
 /* explain */
 .explain-head { font-size: 32px; font-weight: 600; line-height: 1.15; letter-spacing: -.5px; }
-.explain-by { color: var(--accent2); font-size: 15px; font-weight: 600; margin-top: auto; }
+
+/* "this card was written by the model" — the gen-UI tell */
+.gen-badge {
+  align-self: center;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 13px; letter-spacing: .05em;
+  color: var(--accent2);
+  background: linear-gradient(90deg, rgba(134,227,214,.16), rgba(174,182,255,.16));
+  border: 1px solid rgba(174,182,255,.4);
+  padding: 5px 13px; border-radius: 999px; white-space: nowrap;
+  box-shadow: 0 0 20px rgba(174,182,255,.22);
+  animation: genGlow 3.2s ease-in-out infinite;
+}
+@keyframes genGlow {
+  0%,100% { box-shadow: 0 0 16px rgba(174,182,255,.16); opacity: .92; }
+  50%     { box-shadow: 0 0 26px rgba(134,227,214,.30); opacity: 1; }
+}
+/* gallery-only bonus: gen cards get a shimmering gradient edge (the lens view is chromeless) */
+.card-gen { position: relative; }
+.card-gen::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+  background: linear-gradient(120deg, var(--accent), var(--accent2), var(--accent));
+  background-size: 220% 100%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: .55; animation: genShimmer 4s linear infinite; pointer-events: none;
+}
+@keyframes genShimmer { to { background-position: 220% 0; } }
 
 /* question */
 .q-prompt { font-size: 30px; font-weight: 600; line-height: 1.2; letter-spacing: -.3px; }
