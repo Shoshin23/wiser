@@ -1,8 +1,8 @@
 <div align="center">
 
-<video src="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4" width="640" autoplay loop muted playsinline controls></video>
-
-https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4
+<a href="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4">
+  <img src="media/wiser-demo.gif" width="640" alt="wiser demo — coding agents on the glasses lens">
+</a>
 
 # wiser
 
@@ -10,7 +10,7 @@ https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4
 
 *Voice-driven Claude agents, surfaced as glanceable cards on Meta Ray-Ban Display glasses.*
 
-<sub>↑ the lens, in your field of view · <a href="media/wiser-demo-glasses.mp4">download the MP4</a></sub>
+<sub>↑ the lens, in your field of view · <a href="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4">watch / download the MP4</a></sub>
 
 </div>
 
