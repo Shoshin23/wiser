@@ -1,7 +1,24 @@
 # Private — contributor bios / PII, kept local only, never committed
 .claude/skills/team/
 *.local.md
-.env
 .dev.vars
 # Local-only progress log maintained by the /loop watcher
 hackathon-progress.md
+
+# Secrets & env
+.env
+.env.local
+
+# Dependencies & build output
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+.vercel/
+
+# iOS build artifacts
+ios-dat/**/.build/
+ios-dat/**/DerivedData/
+
+sample.webm
