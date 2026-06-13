@@ -257,6 +257,14 @@ final class WiserViewModel {
   @ObservationIgnored private let audio = AudioChunkPlayer()
   @ObservationIgnored private var lastChunks: [String] = []
 
+  // MARK: Lens session-browse state
+  //
+  // Holds the fetched session list and which one is currently shown while the user is
+  // BROWSING sessions ON THE LENS (paging model — see `sendSessionBrowseCard`). These are
+  // @ObservationIgnored because they drive the lens card, not the phone SwiftUI view.
+  @ObservationIgnored private var browseSessions: [SessionSummary] = []
+  @ObservationIgnored private var browseIndex: Int = 0
+
   init(wearables: WearablesInterface) {
     self.wearables = wearables
     self.sessionManager = DeviceSessionManager(wearables: wearables)
@@ -274,7 +282,7 @@ final class WiserViewModel {
           guard let self else { return }
           if state == .started {
             self.glassesReady = true
-            await self.sendCard(title: "wiser", body: "Tap Ask and speak.", control: .ask)
+            await self.sendReadyCard()
           }
         }
       }
@@ -285,8 +293,8 @@ final class WiserViewModel {
     }
   }
 
-  /// Which tappable affordance (if any) the on-lens card should show.
-  /// The button's onClick is delivered back to the app by MWDATDisplay so the
+  /// Which tappable affordance(s) the on-lens card should show.
+  /// Each case's onClick is delivered back to the app by MWDATDisplay so the
   /// Meta Neural Band tap can drive the whole loop hands-on-glasses.
   private enum CardControl {
     case ask    // idle/ready  -> tap starts listening
@@ -340,26 +348,25 @@ final class WiserViewModel {
     }
   }
 
+  /// Send a single-control card (ready/listening/thinking/answer states).
+  ///
+  /// Default-focus / cursor placement.
+  ///
+  /// MWDATDisplay 0.7.0 has NO explicit focus API — there is no `.focused()`,
+  /// `autoFocus`, `defaultFocus`, `tabIndex`, or initial-focus option on Button,
+  /// FlexBox, Text, or Display.send (verified against arm64-apple-ios.swiftinterface
+  /// and the mwdat-ios display-access skill). On the lens the Neural Band cursor
+  /// lands on the FIRST focusable child in document order. Text is not focusable;
+  /// the Button (it carries an onClick) is.
+  ///
+  /// Implicit-focus pattern: emit the primary Button as the FIRST child so it is the
+  /// initial — and only — focusable element, immediately tappable via the Neural Band
+  /// with no scrolling. The title/body Text follow it for context. The whole-card
+  /// `.onTap` below still mirrors the same control as a fallback for an off-center tap.
   private func sendCard(title: String, body: String, control: CardControl = .none) async {
     guard let display else { return }
     let button = controlButton(for: control)
     do {
-      // Default-focus / cursor placement.
-      //
-      // MWDATDisplay 0.7.0 has NO explicit focus API — there is no `.focused()`,
-      // `autoFocus`, `defaultFocus`, `tabIndex`, or initial-focus option on Button,
-      // FlexBox, Text, or Display.send (verified against arm64-apple-ios.swiftinterface
-      // and the mwdat-ios display-access skill). On the lens the Neural Band cursor
-      // lands on the FIRST focusable child in document order. Text is not focusable;
-      // the Button (it carries an onClick) is. The previous layout put the Button
-      // LAST — after the heading and body Text — so the card started with focus above
-      // the button and the user had to scroll down to reach it.
-      //
-      // Fix (implicit-focus pattern): emit the primary Button as the FIRST child so
-      // it is the initial — and only — focusable element, immediately tappable via the
-      // Neural Band with no scrolling. The title/body Text follow it for context.
-      // The whole-card `.onTap` below still mirrors the same control as a fallback for
-      // an off-center band tap.
       try await display.send(
         FlexBox(direction: .column, spacing: 12) {
           if let button {
@@ -382,6 +389,282 @@ final class WiserViewModel {
       let msg = (error as? DisplayError)?.description ?? error.localizedDescription
       DATLog.log.error("[wiser] display.send failed: \(msg, privacy: .public)")
     }
+  }
+
+  /// The answer card. Like `sendCard(control: .again)` but adds a **Sessions** button so
+  /// the lens session-browse entry stays reachable after a conversation. "Ask again" is
+  /// emitted FIRST (implicit cursor lands on it); whole-card `.onTap` mirrors Ask again.
+  private func sendAnswerCard(title: String, body: String) async {
+    guard let display else { return }
+    let againButton = MWDATDisplay.Button(
+      label: "Ask again",
+      style: .primary,
+      iconName: .twoArrowsClockwise,
+      onClick: { [weak self] in Task { @MainActor in self?.runControl(.again) } }
+    )
+    let sessionsButton = MWDATDisplay.Button(
+      label: "Sessions",
+      style: .secondary,
+      iconName: .speechBubble,
+      onClick: { [weak self] in Task { @MainActor in await self?.openSessionsOnLens() } }
+    )
+    do {
+      try await display.send(
+        FlexBox(direction: .column, spacing: 12) {
+          FlexBox(direction: .row, spacing: 8) {
+            againButton
+            sessionsButton
+          }
+          MWDATDisplay.Text(title, style: .heading)
+          if !body.isEmpty {
+            MWDATDisplay.Text(body, style: .body, color: .secondary)
+          }
+        }
+        .padding(24)
+        .background(.card)
+        .onTap { [weak self] in Task { @MainActor in self?.runControl(.again) } }
+      )
+    } catch {
+      let msg = (error as? DisplayError)?.description ?? error.localizedDescription
+      DATLog.log.error("[wiser] sendAnswerCard failed: \(msg, privacy: .public)")
+    }
+  }
+
+  // MARK: - Lens entry / ready card
+
+  /// The idle/ready lens card. Entry point to the whole lens UX: two buttons —
+  /// **Ask** (start the voice loop) and **Sessions** (browse past conversations
+  /// ON THE LENS). Ask is emitted FIRST so the implicit cursor lands on the most
+  /// common action; the whole-card `.onTap` mirrors Ask as a fallback.
+  ///
+  /// We render the two buttons in a `.row` FlexBox so they sit side-by-side as two
+  /// distinct focusable affordances. (See `sendSessionBrowseCard` for why we keep
+  /// the focusable-button count small and provide whole-card tap fallbacks: 0.7.0
+  /// has no API to express or observe multi-item focus traversal.)
+  private func sendReadyCard() async {
+    guard let display else { return }
+    let askButton = MWDATDisplay.Button(
+      label: "Ask",
+      style: .primary,
+      iconName: .metaAi,
+      onClick: { [weak self] in Task { @MainActor in self?.runControl(.ask) } }
+    )
+    let sessionsButton = MWDATDisplay.Button(
+      label: "Sessions",
+      style: .secondary,
+      iconName: .speechBubble,
+      onClick: { [weak self] in Task { @MainActor in await self?.openSessionsOnLens() } }
+    )
+    do {
+      try await display.send(
+        FlexBox(direction: .column, spacing: 12) {
+          FlexBox(direction: .row, spacing: 8) {
+            askButton
+            sessionsButton
+          }
+          MWDATDisplay.Text("wiser", style: .heading)
+          MWDATDisplay.Text(currentSessionId == nil
+                              ? "Tap Ask to speak, or Sessions to resume."
+                              : "Continuing \(sessionLabel). Ask or pick Sessions.",
+                            style: .body, color: .secondary)
+        }
+        .padding(24)
+        .background(.card)
+        // Off-center tap defaults to the most common action (Ask).
+        .onTap { [weak self] in Task { @MainActor in self?.runControl(.ask) } }
+      )
+    } catch {
+      let msg = (error as? DisplayError)?.description ?? error.localizedDescription
+      DATLog.log.error("[wiser] sendReadyCard failed: \(msg, privacy: .public)")
+    }
+  }
+
+  // MARK: - Lens session browsing (paging model)
+  //
+  // NAVIGATION MODEL: PAGING (one session per card), chosen because MWDATDisplay 0.7.0
+  // exposes NO focus API and NO way to express, observe, or control which of several
+  // focusable items is selected (verified against arm64-apple-ios.swiftinterface — the
+  // only interaction primitives are `Button.onClick` and `FlexBox.onTap` — and the
+  // display-access skill, which documents no cursor/swipe traversal between items).
+  // Rendering the whole list as a column of N Buttons would gamble that band swipes move
+  // a cursor between them, which is undocumented. Instead we show ONE session per card
+  // with a small, fixed set of explicit, individually-tappable buttons:
+  //   [Select] [Next] [New] [Back]
+  // plus the whole-card `.onTap` wired to Select as a fallback. The user swipes/taps to
+  // the Next button to advance through sessions and taps Select to resume the shown one.
+
+  /// Entry from the ready card's "Sessions" button: fetch the list and show the first
+  /// session on the lens. Shows a brief loading card, then the first page (or an empty
+  /// card offering New / Back if there are no sessions).
+  private func openSessionsOnLens() async {
+    await sendCard(title: "Sessions…", body: "Loading conversations.")
+    do {
+      let list = try await fetchSessions()
+      browseSessions = list
+      browseIndex = 0
+      if list.isEmpty {
+        await sendEmptySessionsCard()
+      } else {
+        await sendSessionBrowseCard()
+      }
+    } catch {
+      // Surface on the lens AND fall back to the ready card so the user is never stuck.
+      await sendCard(title: "Sessions failed",
+                     body: String(error.localizedDescription.prefix(120)))
+      try? await Task.sleep(nanoseconds: 1_500_000_000)
+      await sendReadyCard()
+    }
+  }
+
+  /// No sessions yet: offer New (start fresh) and Back (return to ready).
+  private func sendEmptySessionsCard() async {
+    guard let display else { return }
+    let newButton = MWDATDisplay.Button(
+      label: "New",
+      style: .primary,
+      iconName: .plus,
+      onClick: { [weak self] in Task { @MainActor in await self?.newSessionOnLens() } }
+    )
+    let backButton = MWDATDisplay.Button(
+      label: "Back",
+      style: .secondary,
+      iconName: .arrowLeft,
+      onClick: { [weak self] in Task { @MainActor in await self?.sendReadyCard() } }
+    )
+    do {
+      try await display.send(
+        FlexBox(direction: .column, spacing: 12) {
+          FlexBox(direction: .row, spacing: 8) {
+            newButton
+            backButton
+          }
+          MWDATDisplay.Text("No conversations", style: .heading)
+          MWDATDisplay.Text("Start a New one, or go Back.", style: .body, color: .secondary)
+        }
+        .padding(24)
+        .background(.card)
+        .onTap { [weak self] in Task { @MainActor in await self?.newSessionOnLens() } }
+      )
+    } catch {
+      let msg = (error as? DisplayError)?.description ?? error.localizedDescription
+      DATLog.log.error("[wiser] sendEmptySessionsCard failed: \(msg, privacy: .public)")
+    }
+  }
+
+  /// Short, glanceable label for one session on the lens: preview, else title, else id.
+  private func browseLabel(_ s: SessionSummary) -> String {
+    let primary = String(s.displayTitle.prefix(60))
+    if let rel = WiserRelativeTime.string(from: s.updatedAt ?? s.createdAt) {
+      return "\(primary)\n\(rel)"
+    }
+    return primary
+  }
+
+  /// Render the session at `browseIndex` as a single card with paging controls.
+  ///
+  /// Focusable buttons (kept deliberately few, primary action FIRST so the implicit
+  /// cursor lands on it): [Select] then [Next] (only if more than one) then [New] then
+  /// [Back]. The whole-card `.onTap` resumes the shown session as a fallback. The body
+  /// shows "i of N" so the user knows where they are while paging.
+  private func sendSessionBrowseCard() async {
+    guard let display else { return }
+    guard !browseSessions.isEmpty else {
+      await sendEmptySessionsCard()
+      return
+    }
+    let count = browseSessions.count
+    let index = max(0, min(browseIndex, count - 1))
+    browseIndex = index
+    let session = browseSessions[index]
+    let sessionId = session.id
+    let position = "\(index + 1) of \(count)"
+
+    let selectButton = MWDATDisplay.Button(
+      label: "Select",
+      style: .primary,
+      iconName: .checkmark,
+      onClick: { [weak self] in Task { @MainActor in await self?.pickSessionOnLens(id: sessionId) } }
+    )
+    let nextButton = MWDATDisplay.Button(
+      label: "Next",
+      style: .secondary,
+      iconName: .triangleRight,
+      onClick: { [weak self] in Task { @MainActor in await self?.advanceBrowse() } }
+    )
+    let newButton = MWDATDisplay.Button(
+      label: "New",
+      style: .secondary,
+      iconName: .plus,
+      onClick: { [weak self] in Task { @MainActor in await self?.newSessionOnLens() } }
+    )
+    let backButton = MWDATDisplay.Button(
+      label: "Back",
+      style: .outline,
+      iconName: .arrowLeft,
+      onClick: { [weak self] in Task { @MainActor in await self?.sendReadyCard() } }
+    )
+
+    do {
+      try await display.send(
+        FlexBox(direction: .column, spacing: 10) {
+          // Primary + paging controls as a row of distinct focusable buttons.
+          FlexBox(direction: .row, spacing: 8) {
+            selectButton
+            if count > 1 {
+              nextButton
+            }
+            newButton
+            backButton
+          }
+          MWDATDisplay.Text(position, style: .meta, color: .secondary)
+          MWDATDisplay.Text(browseLabel(session), style: .body)
+        }
+        .padding(20)
+        .background(.card)
+        // Off-center tap resumes the currently shown session.
+        .onTap { [weak self] in Task { @MainActor in await self?.pickSessionOnLens(id: sessionId) } }
+      )
+    } catch {
+      let msg = (error as? DisplayError)?.description ?? error.localizedDescription
+      DATLog.log.error("[wiser] sendSessionBrowseCard failed: \(msg, privacy: .public)")
+    }
+  }
+
+  /// Advance to the next session (wraps around to the first), then re-render.
+  private func advanceBrowse() async {
+    guard !browseSessions.isEmpty else { return }
+    browseIndex = (browseIndex + 1) % browseSessions.count
+    await sendSessionBrowseCard()
+  }
+
+  /// Resume the picked session: point future asks at it, show a brief confirmation
+  /// card on the lens, then return to the ready/ask card.
+  private func pickSessionOnLens(id: String) async {
+    // Keep transcript as-is — the next ask continues this conversation's memory.
+    resumeSession(id: id, clearTranscript: false)
+    let preview = browseSessions.first(where: { $0.id == id }).map { String($0.displayTitle.prefix(80)) } ?? ""
+    await sendCard(title: "Resumed", body: preview.isEmpty ? sessionLabel : preview)
+    try? await Task.sleep(nanoseconds: 1_200_000_000)
+    await sendReadyCard()
+  }
+
+  /// Start a brand-new conversation from the lens, show a confirmation, return to ready.
+  /// Tries the backend `POST /api/sessions`; if that fails, falls back to clearing the
+  /// current session id so the next ask still starts fresh (the lens path never dead-ends).
+  private func newSessionOnLens() async {
+    do {
+      try await startNewSession()
+    } catch {
+      // Backend create failed — clear locally so the next ask starts a fresh conversation.
+      currentSessionId = nil
+      transcript = ""
+      answer = ""
+      lastChunks = []
+      DATLog.log.error("[wiser] newSessionOnLens create failed, cleared locally: \(String(describing: error), privacy: .public)")
+    }
+    await sendCard(title: "New conversation", body: "Tap Ask and speak.")
+    try? await Task.sleep(nanoseconds: 1_200_000_000)
+    await sendReadyCard()
   }
 
   // MARK: Voice loop
@@ -461,7 +744,7 @@ final class WiserViewModel {
     if let sid = r.sessionId, !sid.isEmpty {
       currentSessionId = sid
     }
-    await sendCard(title: r.card.title, body: String(r.answer.prefix(240)), control: .again)
+    await sendAnswerCard(title: r.card.title, body: String(r.answer.prefix(240)))
 
     if r.audioChunks.isEmpty {
       phase = .idle
