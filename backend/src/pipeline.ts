@@ -31,6 +31,6 @@ export async function runAskText(
   } catch (err) {
     console.warn("TTS failed (continuing without audio):", err instanceof Error ? err.message : err);
   }
-  const card = distill(answer, transcript);
+  const card = await distill(answer, transcript);
   return { transcript, answer, audioChunks, card };
 }

@@ -47,6 +47,11 @@ loadEnvFile(path.join(__dirname, "..", "firebase", "functions", ".env"));
 const PORT = process.env.PORT || 8788;
 const STT_MODEL = process.env.STT_MODEL || "whisper-large-v3-turbo";
 const SCAN_MODEL = process.env.SCAN_MODEL || "claude-haiku-4-5";
+// Which provider runs the cheap scan step. "anthropic" (Haiku) is the live default;
+// flip to "nemotron" to route the scan through Nebius without touching the route code.
+const SCAN_PROVIDER = process.env.SCAN_PROVIDER || "anthropic";
+const NEBIUS_BASE_URL = process.env.NEBIUS_BASE_URL || "https://api.tokenfactory.nebius.com/v1/";
+const NEMOTRON_SCAN_MODEL = process.env.NEMOTRON_SCAN_MODEL || "nvidia/nemotron-3-nano-30b-a3b";
 const FIREBASE_BASE_URL =
   process.env.WISER_FIREBASE_URL ||
   "https://us-central1-wiser-1a319.cloudfunctions.net/wiser";
@@ -58,7 +63,8 @@ const SCAN_MAX_CHARS = 1500; // rolling transcript window fed to Haiku
 const Groq = require("groq-sdk").default || require("groq-sdk");
 const { toFile } = require("groq-sdk");
 const Anthropic = require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
-let _groq, _anthropic;
+const OpenAI = require("openai").default || require("openai");
+let _groq, _anthropic, _nebius;
 function groqClient() {
   if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY not configured");
   if (!_groq) _groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -68,6 +74,12 @@ function anthropicClient() {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not configured");
   if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   return _anthropic;
+}
+// Nemotron via Nebius Token Factory (OpenAI-SDK compatible).
+function nebiusClient() {
+  if (!process.env.NEBIUS_API_KEY) throw new Error("NEBIUS_API_KEY not configured");
+  if (!_nebius) _nebius = new OpenAI({ baseURL: NEBIUS_BASE_URL, apiKey: process.env.NEBIUS_API_KEY });
+  return _nebius;
 }
 
 // ───────────────────────── STT (Groq Whisper, same pattern as backend/src/groq.ts) ─────────────────────────
@@ -134,18 +146,35 @@ const SCAN_SCHEMA = {
   additionalProperties: false,
 };
 
-async function scanForOpportunity(transcript, proposed) {
+// Build the per-request user turn (kept separate so the cached system prefix is stable).
+function buildScanUserContent(transcript, proposed) {
   const window = String(transcript || "").slice(-SCAN_MAX_CHARS).trim();
   if (!window) return null;
   let userContent = "Recent conversation transcript:\n\n" + window;
-  // Already-proposed tasks (dynamic, per-request) — kept in the user turn so the
-  // cached system prefix stays stable. Bounded so the prompt can't grow unbounded.
+  // Already-proposed tasks (dynamic, per-request). Bounded so the prompt can't grow unbounded.
   const prior = (Array.isArray(proposed) ? proposed : []).filter(Boolean).slice(-25);
   if (prior.length) {
     userContent +=
       "\n\nTasks ALREADY PROPOSED this session — do NOT propose these again or anything substantially overlapping:\n" +
       prior.map((p, i) => (i + 1) + ". " + (p.title ? p.title + " — " : "") + (p.proposedPrompt || "")).join("\n");
   }
+  return userContent;
+}
+
+// Parse a model's JSON text into a clean opportunity (or null).
+function normalizeOpportunity(text) {
+  let parsed;
+  try { parsed = JSON.parse(text); } catch (e) {
+    console.warn("scan: could not parse model JSON:", String(text).slice(0, 200));
+    return null;
+  }
+  const opp = parsed && parsed.opportunity;
+  if (!opp || !opp.title || !opp.proposedPrompt) return null;
+  return { title: opp.title, summary: opp.summary || "", proposedPrompt: opp.proposedPrompt };
+}
+
+// ── Anthropic (Claude Haiku) — the live default ──
+async function scanWithAnthropic(userContent) {
   const res = await anthropicClient().messages.create({
     model: SCAN_MODEL,
     max_tokens: 400,
@@ -154,14 +183,32 @@ async function scanForOpportunity(transcript, proposed) {
     messages: [{ role: "user", content: userContent }],
   });
   const text = (res.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-  let parsed;
-  try { parsed = JSON.parse(text); } catch (e) {
-    console.warn("scan: could not parse model JSON:", text.slice(0, 200));
-    return null;
-  }
-  const opp = parsed && parsed.opportunity;
-  if (!opp || !opp.title || !opp.proposedPrompt) return null;
-  return { title: opp.title, summary: opp.summary || "", proposedPrompt: opp.proposedPrompt };
+  return normalizeOpportunity(text);
+}
+
+// ── Nemotron via Nebius — written but not the default; set SCAN_PROVIDER=nemotron to use it ──
+async function scanWithNemotron(userContent) {
+  const res = await nebiusClient().chat.completions.create({
+    model: NEMOTRON_SCAN_MODEL,
+    max_tokens: 400,
+    temperature: 0.2,
+    // Schema in the param AND the prompt — small MoE models occasionally emit a stray prefix.
+    response_format: { type: "json_schema", json_schema: { name: "scan", schema: SCAN_SCHEMA } },
+    messages: [
+      { role: "system", content: SCAN_SYSTEM + "\n\nRespond ONLY as JSON matching: { \"opportunity\": { title, summary, proposedPrompt } | null }." },
+      { role: "user", content: userContent },
+    ],
+  });
+  const text = (res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content) || "";
+  return normalizeOpportunity(text);
+}
+
+async function scanForOpportunity(transcript, proposed) {
+  const userContent = buildScanUserContent(transcript, proposed);
+  if (!userContent) return null;
+  return SCAN_PROVIDER === "nemotron"
+    ? scanWithNemotron(userContent)
+    : scanWithAnthropic(userContent);
 }
 
 // ───────────────────────── HTTP ─────────────────────────
@@ -273,7 +320,9 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log("wiser ambient-webapp on http://localhost:" + PORT);
   console.log("  Groq key:", !!process.env.GROQ_API_KEY, " Anthropic key:", !!process.env.ANTHROPIC_API_KEY);
-  console.log("  scan model:", SCAN_MODEL, " stt:", STT_MODEL, " agent proxy ->", FIREBASE_BASE_URL);
+  const scanModel = SCAN_PROVIDER === "nemotron" ? NEMOTRON_SCAN_MODEL : SCAN_MODEL;
+  console.log("  scan provider:", SCAN_PROVIDER, " scan model:", scanModel, " stt:", STT_MODEL, " agent proxy ->", FIREBASE_BASE_URL);
+  console.log("  Nebius key:", !!process.env.NEBIUS_API_KEY);
 });
 
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e));
