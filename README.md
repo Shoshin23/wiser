@@ -153,14 +153,17 @@ fix. So read the table as evidence for **"one in-loop touch closes the gap,"** n
 
 ## Architecture
 
-Three loosely-coupled pieces, each buildable and demoable on its own:
+Loosely-coupled pieces, each buildable and demoable on its own — every directory has its own README with
+run commands, endpoints, and env vars:
 
 | Path | What |
 |------|------|
-| `ios/CameraAccess/` | **Native iOS DAT app — the real glasses client.** Camera + mic + on-lens display + voice + photo-to-brainstorm (Meta Wearables DAT). |
-| `backend/` | Node + TypeScript orchestrator (Claude Agent SDK + Managed Agents): STT → scan → fleet → distill → TTS; serves cards/HUD over WebSocket/SSE. Includes the eval harness. |
-| `firebase/` | Serverless backend the iOS app calls (Anthropic Managed Agents + Groq STT/TTS). |
-| `glasses-webapp/` | Vanilla-JS 600×600 lens app — the card-UI + interaction prototype, runnable in Chrome and on-device. |
+| [`ios/`](./ios/) | **Native iOS DAT app — the real glasses client.** Three surfaces (Ask / Build / Brainstorm): on-lens display + voice + camera (Meta Wearables DAT). |
+| [`backend/`](./backend/) | Node + TypeScript voice pipeline (STT → agent → Nemotron distill → TTS) **and** the cost–quality eval harness. |
+| [`firebase/`](./firebase/) | Serverless backend the iOS app calls — Anthropic Managed Agents (Q&A + coding orchestrator) + Groq STT/TTS. |
+| [`ambient-webapp/`](./ambient-webapp/) | The brainstorm scan server + UI — live-transcribes a meeting, scans with Haiku/Nemotron, surfaces ideas as cards. |
+| [`glasses-webapp/`](./glasses-webapp/) | Vanilla-JS 600×600 lens app — the card-UI + interaction prototype, runnable in Chrome and on-device. |
+| [`docs/`](./docs/) | Specs (orchestrator / HUD / card contract, metrics) and dated handoff notes. |
 
 **The seam** is the card contract: agents emit results → the distiller normalizes them into
 `{kind, headline, one-liner, actions[]}` → the display renders the card + deep-dive.
