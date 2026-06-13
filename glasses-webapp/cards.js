@@ -1,0 +1,162 @@
+/* wiser — shared renderers for the Card union + the HUD.
+   Used by BOTH the live glasses app (app.js) and the preview gallery, so what
+   you evaluate in the gallery is exactly what ships. Pure DOM, no deps.
+*/
+(function () {
+  "use strict";
+  var W = (window.WISER = window.WISER || {});
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  /* ---------------- CARD ----------------
+     Returns a focusable .card element for `card`. Options:
+       { active: bool }  → question options are focusable & wired via onPick(i)
+       onPick(index)     → called when a question option is chosen
+  */
+  W.renderCard = function (card, opts) {
+    opts = opts || {};
+    var meta = W.CARD_META[card.kind] || { title: "Card", icon: "•", color: "var(--text)" };
+    var root = el("div", "card card-" + card.kind);
+    root.style.setProperty("--card-accent", card.kind === "explain"
+      ? "var(--accent2)" : meta.color);
+
+    var head = el("div", "card-head");
+    head.appendChild(el("span", "card-icon", meta.icon));
+    head.appendChild(el("span", "card-kind", W.cardTitle(card)));
+    root.appendChild(head);
+
+    var body = el("div", "card-body");
+    root.appendChild(body);
+
+    switch (card.kind) {
+      case "diff":      renderDiff(body, card); break;
+      case "tests":     renderTests(body, card); break;
+      case "cost":      renderCost(body, card); break;
+      case "explain":   renderExplain(body, card); break;
+      case "question":  renderQuestion(body, card, opts); break;
+      case "checkpoint": renderCheckpoint(body, card); break;
+      case "done":      renderDone(body, card); break;
+    }
+    return root;
+  };
+
+  // Glasses = a few words. Each card: one hero + at most one short line.
+  // Anything longer lives in the deep-dive (Enter) or the spoken detail.
+  function renderDiff(body, c) {
+    var stat = el("div", "diff-stat");
+    stat.appendChild(el("span", "diff-add", "+" + c.added));
+    stat.appendChild(el("span", "diff-rem", "−" + c.removed));
+    body.appendChild(stat);
+    body.appendChild(el("div", "card-line muted clamp1", c.files + " file" + (c.files === 1 ? "" : "s")));
+  }
+
+  function renderTests(body, c) {
+    var pct = c.total ? Math.round((c.passed / c.total) * 100) : 0;
+    var big = el("div", "tests-big");
+    big.appendChild(el("span", "tests-pass", String(c.passed)));
+    big.appendChild(el("span", "tests-of", " / " + c.total));
+    body.appendChild(big);
+    var bar = el("div", "mini-bar");
+    var fill = el("div", "mini-bar-fill"); fill.style.width = pct + "%";
+    fill.classList.add(c.passed === c.total ? "ok" : "warn");
+    bar.appendChild(fill); body.appendChild(bar);
+    var n = (c.failing && c.failing.length) || 0;
+    if (n === 0) body.appendChild(el("div", "card-line ok", "all green"));
+    else body.appendChild(el("div", "card-line muted clamp1", n === 1 ? c.failing[0] : n + " failing"));
+  }
+
+  function renderCost(body, c) {
+    body.appendChild(el("div", "cost-big", "$" + c.usd.toFixed(2)));
+    body.appendChild(el("div", "card-line muted clamp1", W.fmtTokens(c.tokens)));
+  }
+
+  function renderExplain(body, c) {
+    body.appendChild(el("div", "explain-head clamp2", c.headline || ""));
+    body.appendChild(el("div", "explain-by", "✦ Nemotron"));
+  }
+
+  // intermediate "where are we" — progress + the running token/cost meter
+  function renderCheckpoint(body, c) {
+    body.appendChild(el("div", "ck-progress", c.progress));
+    var row = el("div", "ck-stats");
+    if (c.iter != null) row.appendChild(stat("iter", String(c.iter)));
+    row.appendChild(stat("tokens", W.fmtTokens(c.tokens)));
+    row.appendChild(stat("cost", "$" + (c.usd || 0).toFixed(2)));
+    body.appendChild(row);
+    if (c.note) body.appendChild(el("div", "card-line muted clamp1", c.note));
+  }
+
+  // the "how much work got done" summary at an important point
+  function renderDone(body, c) {
+    body.appendChild(el("div", "done-head clamp2", c.headline || "Done"));
+    var grid = el("div", "done-stats");
+    (c.stats || []).forEach(function (s) { grid.appendChild(stat(s.label, s.value)); });
+    body.appendChild(grid);
+  }
+
+  function stat(label, value) {
+    var w = el("div", "stat");
+    w.appendChild(el("span", "stat-v", value));
+    w.appendChild(el("span", "stat-l", label));
+    return w;
+  }
+
+  function renderQuestion(body, c, opts) {
+    body.appendChild(el("div", "q-prompt clamp2", c.prompt));
+    var list = el("div", "q-options");
+    (c.options || []).forEach(function (label, i) {
+      var o = el("button", "q-option", label);
+      o.dataset.optionIndex = String(i);
+      if (opts.active) {
+        o.classList.add("focusable");
+        o.setAttribute("tabindex", "0");
+        o.addEventListener("click", function () { if (opts.onPick) opts.onPick(i); });
+      }
+      list.appendChild(o);
+    });
+    body.appendChild(list);
+  }
+
+  /* ---------------- HUD ----------------
+     Updates an existing HUD DOM (built in index.html) from a Hud object.
+     els = { status, iter, elapsed, cost, goalLabel, goalCount, barFill, ladder }
+  */
+  W.renderHud = function (hud, els) {
+    var st = W.STATUS[hud.status] || W.STATUS.running;
+    if (els.status) {
+      els.status.querySelector(".lbl").textContent = st.label;
+      els.status.querySelector(".dot").style.background = st.color;
+      els.status.classList.toggle("pulse", !!st.pulse);
+      els.status.style.color = st.color;
+    }
+    if (els.iter)    els.iter.textContent = "iter " + hud.iter;
+    if (els.elapsed) els.elapsed.textContent = W.fmtElapsed(hud.elapsedSec);
+    if (els.cost)    els.cost.textContent = "$" + (hud.costUsd || 0).toFixed(2);
+    if (els.goalLabel) els.goalLabel.textContent = hud.exit.label;
+    if (els.goalCount) els.goalCount.textContent = hud.exit.have + " / " + hud.exit.need;
+    if (els.barFill) {
+      var pct = hud.exit.need ? Math.round((hud.exit.have / hud.exit.need) * 100) : 0;
+      els.barFill.style.width = pct + "%";
+      els.barFill.style.background = st.color;
+    }
+    if (els.ladder && !els.ladder.dataset.built) buildLadder(els.ladder, hud.loop);
+  };
+
+  // The loop ladder: a subtle "you are here" across token→turn→goal→meta→mission.
+  // Glasses only ever steer the goal tier — it's highlighted; the rest is context.
+  function buildLadder(host, activeKey) {
+    host.innerHTML = "";
+    W.LOOP_STACK.forEach(function (lvl) {
+      var seg = el("span", "rung" + (lvl.key === activeKey ? " active" : ""), lvl.label);
+      host.appendChild(seg);
+    });
+    host.dataset.built = "1";
+  }
+
+  W.el = el;
+})();

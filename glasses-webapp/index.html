@@ -3,74 +3,94 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no" />
-  <meta name="description" content="wiser — voice-driven Claude agents on Ray-Ban Display glasses" />
+  <meta name="description" content="wiser — steer a fleet of Claude agents from smart glasses" />
   <meta name="mrbd-web-app-capable" content="yes" />
   <title>wiser</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="app">
-    <!-- HOME -->
-    <div id="home" class="screen">
-      <header class="header">
-        <h1>wiser</h1>
-        <span class="header-meta" id="status">Ready</span>
-      </header>
+  <!-- 600×600 glasses surface — the ONLY screen. No companion, no dashboard. -->
+  <div id="stage">
+    <div id="app" class="surface">
 
-      <div class="content" id="home-content">
-        <div id="hint" class="hint">Focus <b>Ask</b> and press the D-pad button to speak.</div>
-
-        <div id="card-slot"><!-- result card injected here --></div>
-
-        <div id="text-row" class="text-row hidden">
-          <input id="text-input" class="text-input focusable" type="text"
-                 placeholder="Type a prompt…" tabindex="0" />
-          <button class="nav-item primary focusable" data-action="send-text">Send</button>
+      <!-- ─────────── AMBIENT: calm by default. Just the target + progress. ─────────── -->
+      <div id="ambient" class="ambient">
+        <div class="task-row">
+          <span id="task-name" class="task-name">—</span>
+          <span id="iter" class="iter"></span>
+        </div>
+        <div class="goal-block">
+          <div class="goal-tag">GOAL</div>
+          <div id="goal-label" class="goal-label">ready</div>
+          <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+          <div id="goal-count" class="goal-count"></div>
         </div>
       </div>
 
-      <nav class="nav-bar">
-        <button class="nav-item primary focusable" data-action="ask">Ask</button>
-        <button class="nav-item focusable" data-action="ask-image">Ask + Image</button>
-        <button class="nav-item focusable" data-action="toggle-text">Type</button>
-      </nav>
-    </div>
+      <!-- ─────────── DECISION: takes the center ONLY when the agent needs you ─────────── -->
+      <div id="decision" class="decision hidden"></div>
 
-    <!-- DETAIL -->
-    <div id="detail" class="screen hidden">
-      <header class="header">
-        <button class="back-btn focusable" data-action="back" tabindex="0">&#8592;</button>
-        <h1 id="detail-title">Result</h1>
-      </header>
-      <div class="content">
-        <div id="detail-transcript" class="detail-transcript"></div>
-        <div id="detail-answer" class="detail-answer"></div>
+      <!-- ─────────── STATUSLINE: always on. The rolling present-tense. ─────────── -->
+      <div id="statusline" class="statusline">
+        <span id="sl-status" class="sl-status"><i class="dot"></i></span>
+        <span id="sl-act" class="sl-act">idle</span>
+        <span id="sl-note" class="sl-note"></span>
+        <span id="sl-cost" class="sl-cost">$0.00</span>
       </div>
-      <nav class="nav-bar">
-        <button class="nav-item focusable" data-action="replay">Replay</button>
-        <button class="nav-item focusable" data-action="back">Back</button>
-      </nav>
+      <div id="hint" class="hint"></div>
+
+      <!-- ─────────── DEEP-DIVE: the only list, pulled on demand (activity trail) ─────────── -->
+      <div id="detail" class="detail hidden">
+        <div class="detail-head">
+          <button class="back-btn focusable" data-action="back" tabindex="0">←</button>
+          <span>Activity</span>
+        </div>
+        <div id="detail-body" class="detail-body"></div>
+      </div>
+
+      <!-- ─────────── VOICE steer ─────────── -->
+      <div id="voice" class="voice hidden">
+        <div class="waves">
+          <svg viewBox="0 0 200 120" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="wg" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#86e3d6" stop-opacity="0" />
+                <stop offset="0.5" stop-color="#86e3d6" />
+                <stop offset="1" stop-color="#aeb6ff" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+            <path class="w w1" d="M-50 60 Q-25 30 0 60 T50 60 T100 60 T150 60 T200 60 T250 60" />
+            <path class="w w2" d="M-50 60 Q-25 80 0 60 T50 60 T100 60 T150 60 T200 60 T250 60" />
+            <path class="w w3" d="M-50 60 Q-25 42 0 60 T50 60 T100 60 T150 60 T200 60 T250 60" />
+          </svg>
+        </div>
+        <div id="voice-label" class="voice-label">Listening…</div>
+        <div id="voice-text" class="voice-text"></div>
+        <div class="voice-hint"><kbd>⏎</kbd> accept · <kbd>⎋</kbd> skip</div>
+      </div>
+
+      <!-- ─────────── START (idle) ─────────── -->
+      <div id="start" class="start">
+        <div class="start-mark">wiser</div>
+        <div class="start-sub">steer the fleet, hands-free</div>
+        <button class="start-btn focusable" data-action="start" tabindex="0">⏎ start the loop</button>
+      </div>
+
     </div>
 
-    <!-- overlays -->
-    <div id="loading" class="overlay hidden">
-      <div class="spinner"></div>
-      <div class="overlay-text" id="loading-text">Thinking…</div>
-    </div>
-    <div id="error" class="overlay hidden">
-      <div class="overlay-icon">&#9888;</div>
-      <div class="overlay-text" id="error-text">Something went wrong</div>
-      <button class="nav-item focusable" data-action="dismiss-error">OK</button>
-    </div>
+    <div id="stage-foot" class="stage-foot">glasses · <span id="mode-badge">demo</span></div>
   </div>
 
-  <!-- hidden capture elements -->
-  <video id="cam" playsinline muted style="display:none"></video>
-  <canvas id="frame" width="640" height="640" style="display:none"></canvas>
-
   <script src="config.js"></script>
+  <script src="contract.js"></script>
+  <script src="cards.js"></script>
+  <script src="mock.js"></script>
+  <script src="session.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

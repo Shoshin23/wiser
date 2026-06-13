@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "demo": "WISER_DEMO=true node server.js",
+    "live": "WISER_DEMO=false node server.js",
+    "backend": "node dev-backend.js"
   }
 }

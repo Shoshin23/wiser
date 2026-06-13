@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>wiser — view gallery</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />   <!-- glasses card/HUD component styles -->
+  <link rel="stylesheet" href="gallery.css" />  <!-- cockpit dashboard system -->
+</head>
+<body>
+  <div class="grain"></div>
+  <div class="cockpit">
+    <aside class="rail">
+      <div class="brand"><span class="mark">wiser</span><span class="ver">view gallery</span></div>
+      <div class="rail-sub">internal design ref · the product is <b style="color:var(--accent)">glasses-only</b></div>
+      <div id="nav"><!-- nav built by gallery.js --></div>
+      <div class="rail-foot">
+        <div><b id="keep-count">0</b> keep · <b id="maybe-count">0</b> maybe · <b id="drop-count">0</b> drop</div>
+        <div class="legend">
+          <span>navigate · <kbd>↑</kbd><kbd>↓</kbd></span>
+          <span>focus view · <kbd>⏎</kbd></span>
+          <span>back · <kbd>esc</kbd></span>
+        </div>
+        <div style="margin-top:8px"><a href="index.html" style="color:var(--accent);text-decoration:none">← live glasses app</a></div>
+      </div>
+    </aside>
+    <main class="stage" id="stage"><!-- views built by gallery.js --></main>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="contract.js"></script>
+  <script src="cards.js"></script>
+  <script src="gallery.js"></script>
+</body>
+</html>
