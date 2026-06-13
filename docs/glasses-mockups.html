@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wiser — glasses mockups (600×600)</title>
+<style>
+  /* ---- glasses design tokens (from card-ui skill) ---------------------------------
+     black renders TRANSPARENT on the lens, so surfaces are never pure black.
+     body >=16px, primary 20-24px, safe area 584 (8dp margin), one root column, <=2 actions, no scroll. */
+  :root{
+    --bg:#0a0a0f;          /* lens surface (near-black, additive-safe) */
+    --card:#1a1a2e;        /* raised block */
+    --line:#26263a;        /* hairline */
+    --ink:#f5f6ff;         /* primary text */
+    --dim:#8b8ca7;         /* meta text */
+    --cyan:#00d4ff;        /* accent / focus */
+    --green:#34d399;       /* goal met / ok */
+    --amber:#fbbf24;       /* judging / blocked / warn */
+    --red:#f87171;         /* fail / reject */
+    --violet:#a78bfa;      /* meta-loop / teams */
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  body{margin:0;background:#101017;color:var(--ink);font-family:var(--sans);padding:40px}
+  h1{font-size:22px;margin:0 0 4px}
+  .intro{color:#b9bad0;max-width:760px;line-height:1.5;font-size:14px;margin:0 0 8px}
+  .intro code{background:#1d1d2b;padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12px}
+
+  /* hierarchy legend */
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 30px;max-width:900px}
+  .legend span{font-size:12px;color:#cfd0e6;background:#1a1a28;border:1px solid var(--line);
+    border-radius:999px;padding:5px 11px;font-family:var(--mono)}
+
+  /* gallery */
+  .wall{display:flex;flex-wrap:wrap;gap:40px}
+  .frame{width:600px}
+  .cap{margin-top:10px;font-size:13px;color:#b9bad0;line-height:1.45;max-width:600px}
+  .cap b{color:var(--ink)}
+  .cap .h{font-family:var(--mono);color:var(--cyan);font-size:11px;letter-spacing:.04em}
+
+  /* ---- THE LENS: a true 600x600 one-view surface ---------------------------------- */
+  .lens{width:600px;height:600px;background:var(--bg);border-radius:28px;overflow:hidden;
+    box-shadow:0 0 0 1px #2a2a3d, 0 24px 60px rgba(0,0,0,.5);position:relative}
+  .safe{position:absolute;inset:8px;padding:36px;display:flex;flex-direction:column;gap:18px} /* root column */
+
+  /* ---- component hierarchy (maps to MWDAT FlexBox/Text/Button) --------------------- */
+  .eyebrow{font-family:var(--mono);font-size:17px;letter-spacing:.12em;color:var(--dim);
+    text-transform:uppercase;display:flex;align-items:center;gap:10px}             /* context: WHERE you are */
+  .headline{font-size:42px;font-weight:650;line-height:1.1;letter-spacing:-.01em}  /* the one thing  (Text .heading) */
+  .hero{font-family:var(--mono);font-size:76px;font-weight:600;line-height:1;letter-spacing:-.02em}/* the signal number */
+  .line{font-size:24px;color:#dadbf0;line-height:1.3}                              /* body (Text .body) */
+  .meta{font-size:18px;color:var(--dim);font-family:var(--mono)}                   /* meta (Text .meta) */
+  .spacer{flex:1}                                                                  /* push actions to bottom */
+  .actions{display:flex;gap:16px}                                                  /* <=2 gesture targets */
+  .btn{flex:1;font-size:24px;font-weight:600;padding:20px;border-radius:18px;border:1px solid var(--line);
+    background:var(--card);color:var(--ink);text-align:center}
+  .btn.primary{background:rgba(0,212,255,.12);border-color:rgba(0,212,255,.5);color:var(--cyan)}
+  .btn.danger{color:var(--red)}
+  .btn.focus{box-shadow:0 0 22px rgba(0,212,255,.45);border-color:var(--cyan)} /* :focus cue (D-pad) */
+
+  /* status dots / chips */
+  .dot{width:13px;height:13px;border-radius:50%;display:inline-block;flex:none}
+  .chip{font-family:var(--mono);font-size:16px;padding:4px 11px;border-radius:8px;background:var(--card);
+    border:1px solid var(--line);color:#cfd0e6;display:inline-flex;align-items:center;gap:8px}
+  .row{display:flex;align-items:center;gap:12px}
+  .between{justify-content:space-between}
+
+  /* progress bar */
+  .bar{height:14px;border-radius:8px;background:#23233a;overflow:hidden}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),#66aadd)}
+
+  /* loop ladder (the hero view) */
+  .ladder{display:flex;flex-direction:column;gap:10px}
+  .rung{display:flex;align-items:center;gap:14px;padding:13px 16px;border-radius:14px;background:#15151f;
+    border:1px solid var(--line)}
+  .rung .lvl{font-family:var(--mono);font-size:15px;color:var(--dim);width:74px;flex:none}
+  .rung .name{font-size:21px;font-weight:600}
+  .rung .stat{margin-left:auto;font-family:var(--mono);font-size:16px;color:var(--dim)}
+  .rung.active{background:rgba(0,212,255,.10);border-color:rgba(0,212,255,.45)}
+  .rung.active .name{color:var(--cyan)}
+  .rung.done .name{color:#cdd}
+  .rung .tier{width:5px;align-self:stretch;border-radius:4px}
+
+  /* step trail (turn-level progress in steps) */
+  .trail{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:var(--mono);font-size:17px}
+  .trail .s{background:var(--card);border:1px solid var(--line);padding:7px 12px;border-radius:10px}
+  .trail .s.ok{border-color:rgba(52,211,153,.5);color:var(--green)}
+  .trail .chev{color:var(--dim)}
+
+  /* list (sessions / mcp / settings) */
+  .list{display:flex;flex-direction:column;gap:12px}
+  .item{display:flex;align-items:center;gap:14px;padding:16px 18px;border-radius:14px;background:#15151f;
+    border:1px solid var(--line);font-size:21px}
+  .item.sel{border-color:var(--cyan);box-shadow:0 0 18px rgba(0,212,255,.3)} /* focused row */
+  .item .sub{margin-left:auto;font-family:var(--mono);font-size:16px;color:var(--dim)}
+  .iter{display:flex;gap:8px;font-family:var(--mono);font-size:24px}
+  .iter .x{color:var(--red)} .iter .v{color:var(--green)}
+</style>
+</head>
+<body>
+  <h1>wiser — glasses lens mockups</h1>
+  <p class="intro">
+    Each frame is a <b>true 600×600 lens</b> — the device shows <b>one view at a time, no scroll, a handful of
+    words</b>. Every dashboard view from <code>ui-metrics.md</code> is compressed to a single glanceable screen
+    built from the <b>same component hierarchy</b>. Surfaces use <code>#0a0a0f</code> (never pure black — black is
+    transparent on the lens). Test on desktop with <b>arrow keys + Enter + Esc</b>.
+  </p>
+  <p class="intro"><b>Component hierarchy</b> (top → bottom, maps to MWDAT <code>FlexBox/Text/Button</code>): one
+    root column, ≤6 elements, ≤2 actions.</p>
+  <div class="legend">
+    <span>① eyebrow · context (where am I)</span>
+    <span>② headline · the one thing</span>
+    <span>③ hero metric · the signal</span>
+    <span>④ body line(s)</span>
+    <span>⑤ progress · bar / chips / trail / ladder</span>
+    <span>⑥ actions · ≤2 gesture targets</span>
+  </div>
+
+  <div class="wall">
+
+    <!-- ============ 1 · LOOP / WORKFLOW TRACKER (hero) ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow"><span class="dot" style="background:var(--cyan)"></span>LOOP · strsim-rs</div>
+        <div class="ladder">
+          <div class="rung done"><div class="tier" style="background:#3a3a52"></div><span class="lvl">tokens</span><span class="name">stream</span><span class="stat">142 tok/s</span></div>
+          <div class="rung active"><div class="tier" style="background:var(--cyan)"></div><span class="lvl">turn</span><span class="name">tool: run_tests</span><span class="stat">turn 4/8</span></div>
+          <div class="rung"><div class="tier" style="background:var(--green)"></div><span class="lvl">task</span><span class="name">goal loop</span><span class="stat">attempt 3</span></div>
+          <div class="rung"><div class="tier" style="background:var(--violet)"></div><span class="lvl">team</span><span class="name">5 agents · 1 leads</span><span class="stat">best-of-N</span></div>
+          <div class="rung"><div class="tier" style="background:#5b5b86"></div><span class="lvl">mission</span><span class="name">3 goals</span><span class="stat">2 on track</span></div>
+        </div>
+        <div class="trail">
+          <span class="s">read_file()</span><span class="chev">›</span>
+          <span class="s">240 ln</span><span class="chev">›</span>
+          <span class="s">run_tests()</span><span class="chev">›</span>
+          <span class="s ok">3 passed</span>
+        </div>
+        <div class="iter">attempts <span class="x">✗</span><span class="x">✗</span><span class="v">✓</span></div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 1 — LOOP / WORKFLOW TRACKER (hero)</span><br>
+      The loop stack made legible. <b>Ladder</b> = the 5 levels with the active one (turn) glowing cyan; the
+      <b>step trail</b> is turn-level progress in steps (the diagram verbatim); the <b>✗✗✓</b> row is goal-loop
+      iterations-to-green. Zoom by drilling into any rung.</p>
+    </div>
+
+    <!-- ============ 2 · FLEET / MISSION CONTROL ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow">FLEET</div>
+        <div class="hero">5 <span style="font-size:34px;color:var(--dim)">running</span></div>
+        <div class="line"><b style="color:var(--amber)">1 needs you</b> · 2 queued · 0 failed</div>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <span class="chip">$4.20</span><span class="chip">1.2M tok</span>
+          <span class="chip"><span class="dot" style="background:var(--green)"></span>healthy</span>
+          <span class="chip">3 goals</span>
+        </div>
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn primary focus">Triage 1</button>
+          <button class="btn">Pause all</button>
+        </div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 2 — FLEET OVERVIEW / MISSION CONTROL</span><br>
+      Whole fleet in one glance. <b>Hero</b> = agents running; the only urgent fact (<b>needs you</b>) is amber;
+      the rest are calm chips. Action jumps straight to the blocked queue.</p>
+    </div>
+
+    <!-- ============ 3 · SESSIONS LIST ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow">SESSIONS · 5</div>
+        <div class="list">
+          <div class="item sel"><span class="dot" style="background:var(--cyan)"></span>strsim perf<span class="sub">iter 3 · $1.10</span></div>
+          <div class="item"><span class="dot" style="background:var(--amber)"></span>docs gen<span class="sub">judging</span></div>
+          <div class="item"><span class="dot" style="background:#5b5b86"></span>codemod<span class="sub">queued</span></div>
+          <div class="item"><span class="dot" style="background:var(--green)"></span>fix tests<span class="sub">done ✓</span></div>
+        </div>
+        <div class="spacer"></div>
+        <div class="meta">↑↓ focus · ↵ open</div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 3 — SESSIONS LIST</span><br>
+      The one place a short scrollless <b>.focusable list</b> fits. Each row = status dot + name + loop
+      state/cost. Selected row glows cyan; Enter drills into View 4.</p>
+    </div>
+
+    <!-- ============ 4 · SESSION DETAIL / DEEP-DIVE ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow">strsim-rs · opus 4.8</div>
+        <div class="headline">levenshtein<br>5.3× faster</div>
+        <div class="hero" style="color:var(--green)">412→78<span style="font-size:30px;color:var(--dim)"> ns</span></div>
+        <div class="line">12/12 tests green · output bit-identical</div>
+        <div class="meta">diff +24 −9 · 3 attempts</div>
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn primary focus">Approve diff</button>
+          <button class="btn danger">Reject</button>
+        </div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 4 — SESSION DETAIL (deep-dive)</span><br>
+      One session's result. <b>Hero</b> carries the headline metric; body proves correctness; ≤2 actions are the
+      real decision. The full transcript stays on the dashboard.</p>
+    </div>
+
+    <!-- ============ 5 · GOALS & PROGRESS ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow">GOAL</div>
+        <div class="headline">Ship perf wins</div>
+        <div class="row between"><span class="meta">2 / 3 done</span><span class="meta">67%</span></div>
+        <div class="bar"><i style="width:67%"></i></div>
+        <div class="line" style="display:flex;flex-direction:column;gap:8px;font-size:21px">
+          <span><span style="color:var(--green)">✓</span> levenshtein &nbsp; <span style="color:var(--green)">✓</span> utf8 validate</span>
+          <span><span style="color:var(--amber)">◐</span> jaro-winkler &nbsp;<span class="meta">— in progress</span></span>
+        </div>
+        <div class="spacer"></div>
+        <div class="actions"><button class="btn primary focus">Open jaro</button><button class="btn">Add goal</button></div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 5 — GOALS &amp; PROGRESS</span><br>
+      A goal as a <b>definition-of-done checklist</b> + completion bar. Sub-goals collapse to ✓/◐ lines — the
+      whole goal tree compressed to what's done and what's next.</p>
+    </div>
+
+    <!-- ============ 6 · MCP / TOOLS & MANAGEMENT ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow">MCP · TOOLS</div>
+        <div class="list">
+          <div class="item"><span class="dot" style="background:var(--green)"></span>github<span class="sub">1.4k · 40ms</span></div>
+          <div class="item"><span class="dot" style="background:var(--green)"></span>tests-mcp<span class="sub">ok</span></div>
+          <div class="item sel"><span class="dot" style="background:var(--amber)"></span>web-search<span class="sub">rate-limited</span></div>
+        </div>
+        <div class="meta">verifier 312 calls · distiller 88</div>
+        <div class="spacer"></div>
+        <div class="actions"><button class="btn primary focus">Restart</button><button class="btn">Permissions</button></div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 6 — MCP / TOOLS &amp; MANAGEMENT</span><br>
+      Server health as a status list; the one degraded server (rate-limited, amber) is pre-focused. Custom-tool
+      (verifier/distiller) call counts as a meta line. Full histograms live on the dashboard.</p>
+    </div>
+
+    <!-- ============ 7 · COST & QUALITY ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow">COST · QUALITY</div>
+        <div class="hero">$4.20<span style="font-size:30px;color:var(--dim)"> / $10</span></div>
+        <div class="row between"><span class="meta">budget burn</span><span class="meta">42%</span></div>
+        <div class="bar"><i style="width:42%"></i></div>
+        <div class="line">cheap fleet: <b style="color:var(--green)">0.9× quality</b> at <b style="color:var(--cyan)">0.6× cost</b></div>
+        <div class="meta">cache 38% · pass 7/8 · p50 3.1s</div>
+        <div class="spacer"></div>
+        <div class="actions"><button class="btn primary focus">Caps</button><button class="btn">Export</button></div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 7 — COST &amp; QUALITY (evidence)</span><br>
+      The cost-quality story as one line, not a chart. <b>Hero</b> = budget burn; the pareto win is a single
+      sentence; secondary stats demote to a meta line.</p>
+    </div>
+
+    <!-- ============ 8 · CARD / INBOX (the canonical approval card) ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow"><span class="dot" style="background:var(--amber)"></span>NEEDS YOU · AGENT 3 / 5</div>
+        <div class="headline">5.3× faster —<br>approve the winner?</div>
+        <div class="line">tests green · output bit-identical to std</div>
+        <div class="meta">best of 5 · others slower or failed</div>
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn primary focus">✓ Approve</button>
+          <button class="btn danger">✕ Reject</button>
+        </div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 8 — CARD / INBOX (the glasses surface)</span><br>
+      The irreducible signal: a <b>decision</b>. This is the only thing the lens renders by default. Approve is
+      pre-focused (cyan glow) → pinch confirms; everything else is voice/deep-dive. The 6 gestures map to
+      approve / reject / drill / next / prev / clarify.</p>
+    </div>
+
+    <!-- ============ 9 · SETTINGS ============ -->
+    <div class="frame">
+      <div class="lens"><div class="safe">
+        <div class="eyebrow">SETTINGS</div>
+        <div class="list">
+          <div class="item sel">Default model<span class="sub">Opus 4.8</span></div>
+          <div class="item">Autonomy<span class="sub">Ask</span></div>
+          <div class="item">Budget cap<span class="sub">$10</span></div>
+          <div class="item">Voice<span class="sub">On</span></div>
+          <div class="item">Ping me when<span class="sub">blocked only</span></div>
+        </div>
+        <div class="spacer"></div>
+        <div class="meta">↵ toggle · esc back</div>
+      </div></div>
+      <p class="cap"><span class="h">VIEW 9 — SETTINGS</span><br>
+      Config as a flat focusable list of key → value. The <b>“ping me when”</b> row is the attention dial — the
+      single most important setting for the non-distracting thesis.</p>
+    </div>
+
+  </div>
+</body>
+</html>
