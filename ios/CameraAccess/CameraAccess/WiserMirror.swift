@@ -31,12 +31,17 @@ final class WiserMirror: @unchecked Sendable {
   private let queue = DispatchQueue(label: "wiser.mirror")
 
   private var listener: NWListener?
+  private var browser: NWBrowser?
   private var started = false
 
   // Latest state (only touched on `queue`).
   private var latestJPEG: Data?
   private var latestCardJSON = "{}"
-  private var lastEncode = Date.distantPast
+
+  // Frame throttle — checked on the caller thread BEFORE encoding, so we don't
+  // JPEG-encode every camera frame on the main thread just to drop most of them.
+  private let throttleLock = NSLock()
+  private var lastFrameAccepted = Date.distantPast
 
   // Open /stream connections we push MJPEG frames to.
   private final class Subscriber {
@@ -73,9 +78,20 @@ final class WiserMirror: @unchecked Sendable {
       }
       listener.start(queue: queue)
       self.listener = listener
+
+      // Pre-trigger the iOS Local Network permission prompt up-front (Apple's
+      // recommended pattern). Without this, the prompt only appears on the FIRST
+      // inbound laptop connection — which is silently dropped until the user taps
+      // Allow, so the demo's first page load looks broken. Browsing forces the
+      // prompt as soon as streaming starts, before anyone opens the laptop URL.
+      let browser = NWBrowser(for: .bonjour(type: "_http._tcp", domain: nil), using: NWParameters())
+      browser.stateUpdateHandler = { _ in }
+      browser.start(queue: queue)
+      self.browser = browser
+
       self.started = true
     } catch {
-      NSLog("[WiserMirror] start failed: \(error)")
+      NSLog("[WiserMirror] start failed (port \(port) busy?): \(error)")
     }
   }
 
@@ -84,6 +100,8 @@ final class WiserMirror: @unchecked Sendable {
       guard let self else { return }
       self.subscribers.values.forEach { $0.conn.cancel() }
       self.subscribers.removeAll()
+      self.browser?.cancel()
+      self.browser = nil
       self.listener?.cancel()
       self.listener = nil
       self.started = false
@@ -95,13 +113,18 @@ final class WiserMirror: @unchecked Sendable {
   /// Tee a camera POV frame. Encoded to JPEG on the caller side (so we hand the
   /// queue a Sendable `Data`, not a non-Sendable `UIImage`); pushes are throttled.
   func publish(frame image: UIImage) {
+    // Throttle to ~12 fps BEFORE the (main-thread) JPEG encode — cheap lock,
+    // avoids encoding camera frames we'd only throw away. Keeps the path light.
+    throttleLock.lock()
+    let now = Date()
+    let accept = now.timeIntervalSince(lastFrameAccepted) > 0.08
+    if accept { lastFrameAccepted = now }
+    throttleLock.unlock()
+    guard accept else { return }
+
     guard let jpeg = image.jpegData(compressionQuality: 0.45) else { return }
     queue.async { [weak self] in
       guard let self else { return }
-      // ~12 fps is plenty for a mirror and keeps the BT→phone→Wi-Fi path light.
-      let now = Date()
-      guard now.timeIntervalSince(self.lastEncode) > 0.08 else { return }
-      self.lastEncode = now
       self.latestJPEG = jpeg
       self.pushFrameToSubscribers(jpeg)
     }
@@ -122,6 +145,16 @@ final class WiserMirror: @unchecked Sendable {
   // MARK: - Connection handling
 
   private func handle(_ conn: NWConnection) {
+    // Set cleanup BEFORE start() so a connection that fails/cancels in the window
+    // before /stream attaches still gets reaped (no leaked subscriber). Harmless
+    // for non-stream connections — the dict removal is just a no-op for them.
+    conn.stateUpdateHandler = { [weak self] state in
+      switch state {
+      case .failed, .cancelled:
+        self?.queue.async { self?.subscribers[ObjectIdentifier(conn)] = nil }
+      default: break
+      }
+    }
     conn.start(queue: queue)
     receiveRequestLine(conn, buffer: Data())
   }
@@ -192,15 +225,10 @@ final class WiserMirror: @unchecked Sendable {
     Connection: close\r
     \r\n
     """
+    // Cleanup handler already set in handle() before start() — covers the case
+    // where this connection dies (even mid-prime, while busy) so it can't leak.
     let sub = Subscriber(conn)
     subscribers[ObjectIdentifier(conn)] = sub
-    conn.stateUpdateHandler = { [weak self] state in
-      switch state {
-      case .failed, .cancelled:
-        self?.queue.async { self?.subscribers[ObjectIdentifier(conn)] = nil }
-      default: break
-      }
-    }
     conn.send(content: Data(header.utf8), completion: .contentProcessed { [weak self] _ in
       // Prime with the most recent frame so the laptop isn't blank until the next tick.
       self?.queue.async {
@@ -217,10 +245,12 @@ final class WiserMirror: @unchecked Sendable {
 
   private func write(_ jpeg: Data, to sub: Subscriber) {
     sub.busy = true
-    let partHeader = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: \(jpeg.count)\r\n\r\n"
+    // RFC 2046: the CRLF *precedes* the boundary (it's part of the delimiter),
+    // it does not trail the body. Trailing-CRLF framing stalls after the first
+    // frame in Safari/Chrome. Leading CRLF on the first part is skipped as preamble.
+    let partHeader = "\r\n--frame\r\nContent-Type: image/jpeg\r\nContent-Length: \(jpeg.count)\r\n\r\n"
     var chunk = Data(partHeader.utf8)
     chunk.append(jpeg)
-    chunk.append(Data("\r\n".utf8))
     sub.conn.send(content: chunk, completion: .contentProcessed { [weak self] error in
       self?.queue.async {
         if error != nil {
@@ -243,6 +273,8 @@ final class WiserMirror: @unchecked Sendable {
     print("👓  WISER MIRROR — open this on your laptop (same Wi-Fi):")
     urls.forEach { print("   \($0)") }
     if urls.isEmpty { print("   (couldn't read Wi-Fi IP — check Settings ▸ Wi-Fi)") }
+    print("   • First run: tap \"Allow\" on the iOS Local Network prompt.")
+    print("   • If the page is blank, reload it once after tapping Allow.")
     print("========================================================\n")
   }
 
