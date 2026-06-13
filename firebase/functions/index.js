@@ -127,36 +127,32 @@ function hardWrap(s, maxChars) {
 // Answer step: Claude Managed Agents (hosted) — replaces the Messages API call
 // ============================================================================
 
-/**
- * Run a single answer turn on Anthropic's HOSTED agent loop:
- *   sessions.create(agent, environment_id) -> events.stream (OPEN BEFORE SEND)
- *   -> events.send(user.message) -> collect agent.message text
- *   -> break only on TERMINAL idle (non-requires_action stop_reason) / terminated.
- * The agent (model/system) + cloud environment are provisioned once and reused
- * via AGENT_ID / ENV_ID. Returns the final assistant text.
- *
- * imageB64 is accepted for API compatibility but unused (text-only for now).
- */
-async function askAnthropic(text, _imageB64, _mediaType = "image/jpeg") {
-  if (!AGENT_ID || !ENV_ID) {
-    throw new Error("AGENT_ID/ENV_ID not configured (run setup-managed-agent.js)");
-  }
+const MA_OPTS = { betas: [MANAGED_AGENTS_BETA] };
 
-  const client = anthropicClient();
-  const opts = { betas: [MANAGED_AGENTS_BETA] };
-
-  // One disposable session per run; the durable agent/env are reused.
-  const session = await client.beta.sessions.create(
+/** Create a fresh managed-agents session against the durable agent/env. */
+async function createSession() {
+  const session = await anthropicClient().beta.sessions.create(
     { agent: AGENT_ID, environment_id: ENV_ID },
-    opts
+    MA_OPTS
   );
+  return session.id;
+}
+
+/**
+ * Send one user turn to an EXISTING session and collect the agent's answer:
+ *   events.stream (OPEN BEFORE SEND) -> events.send(user.message)
+ *   -> collect agent.message text
+ *   -> break only on TERMINAL idle (non-requires_action stop_reason) / terminated.
+ */
+async function runTurn(sessionId, text) {
+  const client = anthropicClient();
 
   // Stream BEFORE send — SSE has no replay. stream() returns an APIPromise that
   // resolves to an async-iterable Stream.
-  const stream = await client.beta.sessions.events.stream(session.id, opts);
+  const stream = await client.beta.sessions.events.stream(sessionId, MA_OPTS);
 
-  await client.beta.sessions.events.send(session.id, {
-    ...opts,
+  await client.beta.sessions.events.send(sessionId, {
+    ...MA_OPTS,
     events: [{ type: "user.message", content: [{ type: "text", text }] }],
   });
 
@@ -176,6 +172,136 @@ async function askAnthropic(text, _imageB64, _mediaType = "image/jpeg") {
   }
 
   return answer.trim();
+}
+
+/** A session id is gone (expired/terminated/invalid/never existed) — start fresh. */
+function isMissingSession(err) {
+  const status = err && err.status;
+  if (status === 404 || status === 410) return true;
+  const msg = ((err && err.message) || "").toLowerCase();
+  const mentionsSession = msg.includes("session");
+  const looksGone = /(not found|invalid|terminat|expir|archiv|does not exist)/.test(msg);
+  return mentionsSession && looksGone;
+}
+
+/**
+ * Run a single answer turn on Anthropic's HOSTED agent loop.
+ * Option A — the CLIENT owns the session id (conversation memory):
+ *   - sessionId given  -> reuse it (the agent remembers the conversation)
+ *   - sessionId absent -> create a new session
+ * If a provided session is gone (expired/terminated), transparently create a
+ * fresh one and retry once. Returns { answer, sessionId } so the caller can
+ * persist the (possibly new) id and keep the conversation going.
+ *
+ * imageB64 is accepted for API compatibility but unused (text-only for now).
+ */
+async function askAnthropic(text, sessionId, _imageB64, _mediaType = "image/jpeg") {
+  if (!AGENT_ID || !ENV_ID) {
+    throw new Error("AGENT_ID/ENV_ID not configured (run setup-managed-agent.js)");
+  }
+
+  let sid = sessionId;
+  if (!sid) sid = await createSession();
+
+  try {
+    const answer = await runTurn(sid, text);
+    return { answer, sessionId: sid };
+  } catch (err) {
+    // Client passed a stale/dead session id — recover by starting a new one.
+    if (sessionId && isMissingSession(err)) {
+      console.warn("session unusable, creating a fresh one:", err && err.message);
+      const fresh = await createSession();
+      const answer = await runTurn(fresh, text);
+      return { answer, sessionId: fresh };
+    }
+    throw err;
+  }
+}
+
+// ============================================================================
+// Browse past sessions (read-only) — Managed Agents list + transcript
+// ============================================================================
+//
+// SCOPING CAVEAT: client.beta.sessions.list() is API-KEY/ORG scoped. It returns
+// EVERY session created with this ANTHROPIC_API_KEY — i.e. across ALL wiser
+// end-users, not per-user. There is no end-user identity on a managed-agents
+// session. If per-user history is needed, filter by a metadata tag set at
+// session-create time, or keep an own index. For now this lists all key sessions.
+
+/** Pull the first `user.message` text for a session as a cheap preview (one tiny page). */
+async function sessionPreview(sessionId) {
+  try {
+    const page = await anthropicClient().beta.sessions.events.list(
+      sessionId,
+      { ...MA_OPTS, limit: 1, types: ["user.message"], order: "asc" }
+    );
+    for await (const ev of page) {
+      if (ev.type === "user.message") {
+        const txt = (ev.content || [])
+          .filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join(" ")
+          .trim();
+        return txt.slice(0, 200) || null;
+      }
+    }
+  } catch (err) {
+    console.warn(`preview failed for ${sessionId}:`, errMsg(err));
+  }
+  return null;
+}
+
+/**
+ * List sessions (newest first), with a cheap per-session preview built from the
+ * first user message. Cursor-paginated: pass `cursor` (opaque), get `nextCursor`.
+ * `withPreview=false` skips the extra per-session events.list calls (faster).
+ */
+async function listSessions({ limit = 20, cursor, withPreview = true } = {}) {
+  const params = { ...MA_OPTS, limit };
+  if (cursor) params.page = cursor;
+  const page = await anthropicClient().beta.sessions.list(params);
+
+  const rows = (page.data || []).map((s) => ({
+    id: s.id,
+    createdAt: s.created_at,
+    updatedAt: s.updated_at,
+    status: s.status,
+    title: s.title || null,
+    agentId: (s.agent && (s.agent.id || s.agent.agent_id)) || null,
+  }));
+
+  if (withPreview) {
+    const previews = await Promise.all(rows.map((r) => sessionPreview(r.id)));
+    rows.forEach((r, i) => {
+      r.preview = previews[i];
+    });
+  }
+
+  return { sessions: rows, nextCursor: page.next_page || null };
+}
+
+/** Full transcript for one session: ordered events flattened to {type, role, text, at}. */
+async function sessionTranscript(sessionId, { limit = 500 } = {}) {
+  const page = await anthropicClient().beta.sessions.events.list(
+    sessionId,
+    { ...MA_OPTS, limit, order: "asc" }
+  );
+
+  const messages = [];
+  for await (const ev of page) {
+    const text = (ev.content || [])
+      .filter((b) => b && b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+    if (ev.type === "user.message") {
+      messages.push({ role: "user", type: ev.type, text, at: ev.created_at });
+    } else if (ev.type === "agent.message") {
+      messages.push({ role: "agent", type: ev.type, text, at: ev.created_at });
+    }
+    if (messages.length >= limit) break;
+  }
+  return messages;
 }
 
 // ============================================================================
@@ -198,12 +324,21 @@ function distill(answer, transcript) {
 /** Full voice pipeline: STT -> answer -> TTS -> card. */
 async function runAsk(audio, opts = {}) {
   const transcript = await transcribe(audio, opts.filename, opts.contentType);
-  return runAskText(transcript, opts.imageB64, opts.imageMediaType);
+  return runAskText(transcript, opts.sessionId, opts.imageB64, opts.imageMediaType);
 }
 
-/** Same pipeline from a typed prompt (skips STT). */
-async function runAskText(transcript, imageB64, imageMediaType) {
-  const answer = await askAnthropic(transcript, imageB64, imageMediaType);
+/**
+ * Same pipeline from a typed prompt (skips STT). The client owns the session id:
+ * pass it in to continue a conversation, omit it to start one. The (possibly new)
+ * id is returned as `sessionId` so the client can persist it for the next turn.
+ */
+async function runAskText(transcript, sessionId, imageB64, imageMediaType) {
+  const { answer, sessionId: sid } = await askAnthropic(
+    transcript,
+    sessionId,
+    imageB64,
+    imageMediaType
+  );
   // TTS is best-effort: a failure must not sink the card.
   let audioChunks = [];
   try {
@@ -212,7 +347,7 @@ async function runAskText(transcript, imageB64, imageMediaType) {
     console.warn("TTS failed (continuing without audio):", err instanceof Error ? err.message : err);
   }
   const card = distill(answer, transcript);
-  return { transcript, answer, audioChunks, card };
+  return { transcript, answer, audioChunks, card, sessionId: sid };
 }
 
 // ============================================================================
@@ -274,10 +409,11 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-// Voice (+ optional image) -> spoken answer card. multipart: audio, image
+// Voice (+ optional image) -> spoken answer card. multipart: audio, image,
+// optional `sessionId` field to continue a conversation (client owns the id).
 app.post("/api/ask", async (req, res) => {
   try {
-    const { files } = await parseMultipart(req);
+    const { fields, files } = await parseMultipart(req);
     const audio = files.audio;
     if (!audio) return res.status(400).json({ error: "missing 'audio' file" });
     const image = files.image;
@@ -285,6 +421,7 @@ app.post("/api/ask", async (req, res) => {
     const result = await runAsk(audio.buffer, {
       filename: audio.filename || "recording.webm",
       contentType: audio.mimeType || "audio/webm",
+      sessionId: fields.sessionId || undefined,
       imageB64: image ? image.buffer.toString("base64") : undefined,
       imageMediaType: image ? image.mimeType : undefined,
     });
@@ -295,18 +432,58 @@ app.post("/api/ask", async (req, res) => {
   }
 });
 
-// Typed-prompt fallback (bypasses STT). JSON: { text, imageB64?, imageMediaType? }
+// Typed-prompt fallback (bypasses STT).
+// JSON: { text, sessionId?, imageB64?, imageMediaType? }
+// Pass `sessionId` from a previous response to continue the conversation; omit
+// it to start fresh. The response echoes the (possibly new) `sessionId`.
 app.post("/api/ask-text", express.json({ limit: "15mb" }), async (req, res) => {
   try {
-    const { text, imageB64, imageMediaType } = req.body || {};
+    const { text, sessionId, imageB64, imageMediaType } = req.body || {};
     if (!text || typeof text !== "string") {
       return res.status(400).json({ error: "missing 'text'" });
     }
-    const result = await runAskText(text, imageB64, imageMediaType);
+    const result = await runAskText(text, sessionId, imageB64, imageMediaType);
     res.json(result);
   } catch (err) {
     console.error("/api/ask-text error:", err);
     res.status(500).json({ error: errMsg(err) });
+  }
+});
+
+// Browse past managed-agents sessions (read-only). KEY/ORG-SCOPED: returns every
+// session created with this API key (all wiser users), newest first.
+// Query: ?limit=20&cursor=<opaque>&preview=0  (preview=0 skips per-session lookups)
+// -> { sessions: [{ id, createdAt, updatedAt, status, title, agentId, preview }], nextCursor }
+app.get("/api/sessions", async (req, res) => {
+  try {
+    if (!AGENT_ID || !ENV_ID) {
+      // Not strictly required to list, but signals the function is configured.
+      // listing works without them; we still allow it.
+    }
+    const rawLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 20;
+    const cursor = req.query.cursor || undefined;
+    const withPreview = req.query.preview !== "0" && req.query.preview !== "false";
+    const result = await listSessions({ limit, cursor, withPreview });
+    res.json(result);
+  } catch (err) {
+    console.error("/api/sessions error:", err);
+    res.status(500).json({ error: errMsg(err) });
+  }
+});
+
+// Full transcript for one session (deep dive).
+// -> { id, messages: [{ role, type, text, at }] }
+app.get("/api/sessions/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id) return res.status(400).json({ error: "missing session id" });
+    const messages = await sessionTranscript(id);
+    res.json({ id, messages });
+  } catch (err) {
+    console.error("/api/sessions/:id error:", err);
+    const status = err && (err.status === 404 || err.status === 410) ? 404 : 500;
+    res.status(status).json({ error: errMsg(err) });
   }
 });
 
