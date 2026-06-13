@@ -2,9 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Core thesis (north star)
+
+**What does the world look like when you can have coding agents in front of you at any moment — without it
+being constantly distracting?**
+
+Always-available agents are easy; *non-distracting* always-available agents are the hard, interesting
+problem. This tension is the design north star and the demo's punchline. It drives every UX decision:
+
+- **Glanceable, not streaming.** Cards surface only what needs a human (a decision, an approval, a
+  blocker) — agents work silently otherwise. The display pings you; it doesn't narrate.
+- **Pull, not push.** Deep-dive is on demand. Default state is calm; detail is one gesture away.
+- **Attention is the scarce resource.** Optimize for the fewest, highest-signal interruptions, not for
+  showing everything the fleet is doing.
+
+Judge any feature by: does it let agents be present without stealing attention?
+
 ## What this is
 
-**wiser** is a hackathon project: a fleet of autonomous coding agents driven by voice and surfaced on Meta Ray-Ban **Display** glasses.
+**wiser** is a hackathon project: a fleet of autonomous coding agents driven by voice and surfaced on Meta
+Ray-Ban **Display** glasses — designed so they're *available everywhere but quiet by default*.
 
 The end-to-end loop:
 
