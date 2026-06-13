@@ -100,6 +100,11 @@ const SCAN_SYSTEM =
   "speakers would plausibly want to hand to the coding agent right now? Be conservative — attention " +
   "is the scarce resource, so only surface a high-signal opportunity. Return null for chit-chat, " +
   "vague musing, non-software topics, or anything you'd have to invent details for.\n\n" +
+  "An explicit request or instruction to add or change something — e.g. 'make it…', 'add…', " +
+  "'we should…', 'can you…' — IS a high-signal opportunity even when under-specified: surface it " +
+  "and let the coding agent choose reasonable details. Only return null if the entire task would " +
+  "be pure guesswork. If the spoken request doesn't name a component, pick the most likely wiser " +
+  "surface and say so in the proposedPrompt.\n\n" +
   "If (and only if) there is one, return an opportunity:\n" +
   "  title          — a glanceable headline, at most 6 words\n" +
   "  summary        — one short line on what/why\n" +
