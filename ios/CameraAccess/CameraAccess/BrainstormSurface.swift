@@ -43,6 +43,22 @@ struct BrainstormContributeResponse: Decodable {
   let ok: Bool?
 }
 
+/// One fleet build, mirroring the ambient server's `GET /api/builds` rows
+/// (`{ id, title, status, line, previewUrl }`). `status` is "building" | "done" | "failed".
+/// `previewUrl` is null while building. Optionals so a missing field never fails decode.
+struct BrainstormBuild: Decodable {
+  let id: String
+  let title: String?
+  let status: String?
+  let line: String?
+  let previewUrl: String?
+}
+
+/// `GET {ambientBaseURL}/api/builds` -> `{ builds: [...] }`, most-recent-first (server-sorted).
+struct BrainstormBuildsList: Decodable {
+  let builds: [BrainstormBuild]
+}
+
 // MARK: - View model
 
 @Observable
@@ -66,6 +82,12 @@ final class BrainstormViewModel {
   @ObservationIgnored private var display: Display?
   @ObservationIgnored private var recorder: AVAudioRecorder?
   @ObservationIgnored private var recordingURL: URL?
+
+  // Build-deck paging (one card per build on the lens — same model as Wiser's session browse:
+  // MWDATDisplay 0.7.0 has no focus/cursor API, so we show ONE build per card and a [Next] button
+  // pages through them). Populated when the user finishes brainstorming.
+  @ObservationIgnored private var builds: [BrainstormBuild] = []
+  @ObservationIgnored private var buildIndex: Int = 0
 
   init(wearables: WearablesInterface) {
     self.wearables = wearables
@@ -134,12 +156,23 @@ final class BrainstormViewModel {
       iconName: .lightBulb,
       onClick: { [weak self] in Task { @MainActor in await self?.startContribution() } }
     )
+    // [Done] ends the brainstorm and shows the fleet's build deck on the lens — the
+    // glasses-first "see what's being worked on" moment when you finish brainstorming.
+    let doneButton = MWDATDisplay.Button(
+      label: "Done",
+      style: .secondary,
+      iconName: .checkmark,
+      onClick: { [weak self] in Task { @MainActor in await self?.finishBrainstorm() } }
+    )
     do {
       try await display.send(
         FlexBox(direction: .column, spacing: 12) {
-          brainstormButton
+          FlexBox(direction: .row, spacing: 8) {
+            brainstormButton
+            doneButton
+          }
           MWDATDisplay.Text("Brainstorm", style: .heading)
-          MWDATDisplay.Text("Tap Brainstorm, speak your idea, then Send.", style: .body, color: .secondary)
+          MWDATDisplay.Text("Tap Brainstorm, speak your idea. Done to see the fleet.", style: .body, color: .secondary)
         }
         .padding(24)
         .background(.card)
@@ -269,6 +302,163 @@ final class BrainstormViewModel {
     await sendBrainstormReadyCard()
   }
 
+  // MARK: Finish brainstorm → show the fleet's build deck on the lens
+  //
+  // NAVIGATION MODEL: PAGING (one build per card), the same choice as Wiser's session browse —
+  // MWDATDisplay 0.7.0 exposes NO focus/cursor API and no way to traverse a column of N items
+  // with the Neural Band, so we show ONE build per card with a [Next] button that pages through
+  // them (wrapping). The lens is ~600×600, one view, a few words — one glanceable card at a time
+  // fits the compression philosophy. COLOR NOTE: the DAT 0.7.0 DSL Text color enum is only
+  // `.primary`/`.secondary` and Background is only `.none`/`.card` (verified against the
+  // swiftinterface) — there is no hex/accent/success/danger color. So we carry the web app's
+  // building→accent / done→success / failed→danger semantics with a leading status GLYPH
+  // (● building · ✓ done · ✗ failed), matching how OrchestratorRun already encodes status.
+
+  /// Finish the brainstorm from the lens: end the active brainstorm on the ambient server, then
+  /// fetch the fleet's builds and show them as a pageable deck on the glasses. Best-effort — if the
+  /// end call fails we still try to show whatever builds exist.
+  func finishBrainstorm() async {
+    await sendCard(title: "Finishing brainstorm…", body: "Gathering what the fleet built.", kind: "running")
+    // End the active brainstorm (best-effort; ignore the result — showing builds is the point).
+    if let endReq = try? makeAmbientGETOrPOST(path: "/api/brainstorms/active/end", post: true) {
+      _ = try? await URLSession.shared.data(for: endReq)
+    }
+    do {
+      let req = try makeAmbientGETOrPOST(path: "/api/builds", post: false)
+      let (data, resp) = try await URLSession.shared.data(for: req)
+      guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        throw WiserError.server("Couldn't load builds from the ambient server")
+      }
+      builds = (try? JSONDecoder().decode(BrainstormBuildsList.self, from: data))?.builds ?? []
+      buildIndex = 0
+      await sendBuildDeckCard()
+    } catch {
+      await sendCard(title: "Couldn't load the fleet", body: String(error.localizedDescription.prefix(120)))
+      try? await Task.sleep(nanoseconds: 1_600_000_000)
+      await sendBrainstormReadyCard()
+    }
+  }
+
+  /// Render the build at `buildIndex` as a single glanceable lens card with paging controls.
+  /// Layout mirrors the project's card grammar: a row of focusable buttons FIRST (the primary
+  /// [Next]/[Done] is the implicit Neural-Band cursor), then a tiny "AGENT · i of N" kind label,
+  /// the build TITLE as the heading (the irreducible signal), and the one-line status beneath.
+  /// The leading glyph (● / ✓ / ✗) carries the building/done/failed color semantics the DSL can't.
+  private func sendBuildDeckCard() async {
+    guard let display else { return }
+    guard !builds.isEmpty else {
+      await sendNoBuildsCard()
+      return
+    }
+    let count = builds.count
+    let index = max(0, min(buildIndex, count - 1))
+    buildIndex = index
+    let b = builds[index]
+    let glyph = Self.buildStatusGlyph(b.status)
+    let title = (b.title?.isEmpty == false ? b.title! : "Prototype")
+    let line = b.line ?? ""
+    let kindLabel = "AGENT · \(index + 1) of \(count)"
+    let headline = "\(glyph) \(title)"
+
+    statusLine = headline
+    WiserMirror.shared.publish(title: headline, body: line, kind: Self.mirrorKind(b.status))
+
+    let nextButton = MWDATDisplay.Button(
+      label: "Next",
+      style: .primary,
+      iconName: .triangleRight,
+      onClick: { [weak self] in Task { @MainActor in await self?.advanceBuild() } }
+    )
+    let doneButton = MWDATDisplay.Button(
+      label: "Done",
+      style: .secondary,
+      iconName: .arrowLeft,
+      onClick: { [weak self] in Task { @MainActor in await self?.sendBrainstormReadyCard() } }
+    )
+    do {
+      try await display.send(
+        FlexBox(direction: .column, spacing: 10) {
+          // Paging controls as a row of distinct focusable buttons (first = implicit cursor).
+          FlexBox(direction: .row, spacing: 8) {
+            if count > 1 { nextButton }
+            doneButton
+          }
+          MWDATDisplay.Text(kindLabel, style: .meta, color: .secondary)
+          MWDATDisplay.Text(headline, style: .heading)
+          if !line.isEmpty {
+            MWDATDisplay.Text(String(line.prefix(120)), style: .body, color: .secondary)
+          }
+        }
+        .padding(20)
+        .background(.card)
+        // Off-center tap pages to the next build (or returns to ready if there's only one).
+        .onTap { [weak self] in
+          Task { @MainActor in
+            if count > 1 { await self?.advanceBuild() } else { await self?.sendBrainstormReadyCard() }
+          }
+        }
+      )
+    } catch {
+      let msg = (error as? DisplayError)?.description ?? error.localizedDescription
+      DATLog.log.error("[brainstorm] sendBuildDeckCard failed: \(msg, privacy: .public)")
+    }
+  }
+
+  /// Empty state: the fleet hasn't built anything yet. Offer Back to the ready card.
+  private func sendNoBuildsCard() async {
+    statusLine = "No builds yet."
+    WiserMirror.shared.publish(title: "No builds yet", body: "Keep brainstorming to spin up the fleet.", kind: "info")
+    guard let display else { return }
+    let backButton = MWDATDisplay.Button(
+      label: "Back",
+      style: .primary,
+      iconName: .arrowLeft,
+      onClick: { [weak self] in Task { @MainActor in await self?.sendBrainstormReadyCard() } }
+    )
+    do {
+      try await display.send(
+        FlexBox(direction: .column, spacing: 12) {
+          backButton
+          MWDATDisplay.Text("No builds yet", style: .heading)
+          MWDATDisplay.Text("Keep brainstorming to spin up the fleet.", style: .body, color: .secondary)
+        }
+        .padding(24)
+        .background(.card)
+        .onTap { [weak self] in Task { @MainActor in await self?.sendBrainstormReadyCard() } }
+      )
+    } catch {
+      let msg = (error as? DisplayError)?.description ?? error.localizedDescription
+      DATLog.log.error("[brainstorm] sendNoBuildsCard failed: \(msg, privacy: .public)")
+    }
+  }
+
+  /// Page to the next build (wraps to the first), then re-render. Mirrors Wiser's `advanceBrowse`.
+  private func advanceBuild() async {
+    guard !builds.isEmpty else { return }
+    buildIndex = (buildIndex + 1) % builds.count
+    await sendBuildDeckCard()
+  }
+
+  /// Status → leading glyph, mapping the web app's color semantics the DSL can't express:
+  /// building → ● (accent), done → ✓ (success), failed → ✗ (danger). Matches OrchestratorRun.
+  private static func buildStatusGlyph(_ status: String?) -> String {
+    switch status {
+    case "done": return "✓"
+    case "failed": return "✗"
+    default: return "●"   // building / unknown
+    }
+  }
+
+  /// Map a build status to the on-phone mirror's kind so the laptop preview tints to match
+  /// (mirror kinds drive the web preview's --accent/--success/--danger, same as the web app).
+  private static func mirrorKind(_ status: String?) -> String {
+    switch status {
+    case "done": return "done"
+    case "failed": return "failed"
+    default: return "running"   // building
+    }
+  }
+
   // MARK: Networking (AMBIENT host only)
 
   /// Base URL for the AMBIENT brainstorm server (ngrok tunnel). Throws if the user hasn't set it.
@@ -290,6 +480,17 @@ final class BrainstormViewModel {
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
     req.setValue("application/json", forHTTPHeaderField: "Accept")
     req.httpBody = try JSONEncoder().encode(body)
+    return req
+  }
+
+  /// Bodyless request against the AMBIENT host — used for `GET /api/builds` (the build deck) and the
+  /// bodyless `POST /api/brainstorms/active/end`. 30s timeout; same base-URL resolution as above.
+  private func makeAmbientGETOrPOST(path: String, post: Bool) throws -> URLRequest {
+    let url = try ambientBaseURL().appendingPathComponent(path.hasPrefix("/") ? String(path.dropFirst()) : path)
+    var req = URLRequest(url: url)
+    req.httpMethod = post ? "POST" : "GET"
+    req.timeoutInterval = 30
+    req.setValue("application/json", forHTTPHeaderField: "Accept")
     return req
   }
 

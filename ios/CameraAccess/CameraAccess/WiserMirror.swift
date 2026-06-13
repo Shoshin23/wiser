@@ -341,7 +341,7 @@ final class WiserMirror: @unchecked Sendable {
   <style>
     :root{
       --text:#eef2f8; --muted:#8b94a8; --card:#0e1118cc; --line:#2a3242;
-      --info:#86e3d6; --running:#86e3d6; --done:#9fe7bd; --cost:#f3d79a; --attn:#f4a6c6;
+      --info:#86e3d6; --running:#86e3d6; --done:#9fe7bd; --cost:#f3d79a; --attn:#f4a6c6; --failed:#f29aa6;
       --font:"SF Pro Rounded",system-ui,-apple-system,sans-serif;
     }
     *{box-sizing:border-box;margin:0;padding:0}
@@ -375,7 +375,7 @@ final class WiserMirror: @unchecked Sendable {
     <div id="card"><div class="kind"></div><div class="title"></div><div class="body"></div></div>
     <div id="tag"><b>wiser</b> · glasses mirror</div>
   <script>
-    const KIND={info:'#86e3d6',running:'#86e3d6',done:'#9fe7bd',cost:'#f3d79a',attn:'#f4a6c6'};
+    const KIND={info:'#86e3d6',running:'#86e3d6',done:'#9fe7bd',cost:'#f3d79a',attn:'#f4a6c6',failed:'#f29aa6'};
     const cam=document.getElementById('cam'),off=document.getElementById('off'),card=document.getElementById('card');
     function showOff(){off.style.display='flex'}
     function hideOff(){off.style.display='none'}
