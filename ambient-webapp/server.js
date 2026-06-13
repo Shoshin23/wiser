@@ -82,6 +82,18 @@ function nebiusClient() {
   return _nebius;
 }
 
+// ───────────────────────── live brainstorm registry (in-memory) ─────────────────────────
+// A brainstorm is a server-side session the glasses (a separate phone client over an
+// ngrok tunnel) can contribute voice+photo into; the browser folds new contributions
+// into its next /api/scan. Lost on restart — fine for a hackathon demo.
+//   session: { id, title, status:"active"|"ended",
+//              contributions:[{id,text,imageB64,mode:"inject",at}], createdAt, updatedAt }
+const brainstorms = new Map(); // id -> session
+function activeBrainstorm() {
+  return [...brainstorms.values()].filter(b => b.status === "active")
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0] || null;
+}
+
 // ───────────────────────── STT (Groq Whisper, same pattern as backend/src/groq.ts) ─────────────────────────
 async function transcribe(buffer, filename, contentType) {
   const file = await toFile(buffer, filename || "chunk.webm", { type: contentType || "audio/webm" });
@@ -147,16 +159,23 @@ const SCAN_SCHEMA = {
 };
 
 // Build the per-request user turn (kept separate so the cached system prefix is stable).
-function buildScanUserContent(transcript, proposed) {
+function buildScanUserContent(transcript, proposed, contributions) {
   const window = String(transcript || "").slice(-SCAN_MAX_CHARS).trim();
-  if (!window) return null;
-  let userContent = "Recent conversation transcript:\n\n" + window;
+  const contribs = (Array.isArray(contributions) ? contributions : []).filter(Boolean);
+  if (!window && !contribs.length) return null;
+  let userContent = "Recent conversation transcript:\n\n" + (window || "(none yet)");
   // Already-proposed tasks (dynamic, per-request). Bounded so the prompt can't grow unbounded.
   const prior = (Array.isArray(proposed) ? proposed : []).filter(Boolean).slice(-25);
   if (prior.length) {
     userContent +=
       "\n\nTasks ALREADY PROPOSED this session — do NOT propose these again or anything substantially overlapping:\n" +
       prior.map((p, i) => (i + 1) + ". " + (p.title ? p.title + " — " : "") + (p.proposedPrompt || "")).join("\n");
+  }
+  // Direct contributions from the team (voice + optional photo) — high signal.
+  if (contribs.length) {
+    userContent +=
+      "\n\nDIRECT CONTRIBUTIONS the team JUST made (high-signal — strongly prefer surfacing an opportunity from these, and if an image is attached, ground the opportunity in what it shows):\n" +
+      contribs.map((c, i) => (i + 1) + ". " + c).join("\n");
   }
   return userContent;
 }
@@ -173,20 +192,25 @@ function normalizeOpportunity(text) {
   return { title: opp.title, summary: opp.summary || "", proposedPrompt: opp.proposedPrompt };
 }
 
-// ── Anthropic (Claude Haiku) — the live default ──
-async function scanWithAnthropic(userContent) {
+// ── Anthropic (Claude Haiku) — the live default. Accepts an optional POV image
+// (a glasses contribution) as a vision block; Haiku is vision-capable. ──
+async function scanWithAnthropic(userContent, imageB64) {
   const res = await anthropicClient().messages.create({
     model: SCAN_MODEL,
     max_tokens: 400,
     system: SCAN_SYSTEM,
     output_config: { format: { type: "json_schema", schema: SCAN_SCHEMA } },
-    messages: [{ role: "user", content: userContent }],
+    messages: [{ role: "user", content: imageB64
+      ? [{ type: "text", text: userContent },
+         { type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageB64 } }]
+      : userContent }],
   });
   const text = (res.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
   return normalizeOpportunity(text);
 }
 
-// ── Nemotron via Nebius — written but not the default; set SCAN_PROVIDER=nemotron to use it ──
+// ── Nemotron via Nebius — written but not the default; set SCAN_PROVIDER=nemotron to use it.
+// Text-only (no vision); a contributed image is ignored on this path. ──
 async function scanWithNemotron(userContent) {
   const res = await nebiusClient().chat.completions.create({
     model: NEMOTRON_SCAN_MODEL,
@@ -203,12 +227,17 @@ async function scanWithNemotron(userContent) {
   return normalizeOpportunity(text);
 }
 
-async function scanForOpportunity(transcript, proposed) {
-  const userContent = buildScanUserContent(transcript, proposed);
-  if (!userContent) return null;
+// A scan can be driven purely by a fresh contribution (voice/photo) even if the
+// browser transcript hasn't grown — so allow an image-only scan too.
+async function scanForOpportunity(transcript, proposed, contributions, imageB64) {
+  let userContent = buildScanUserContent(transcript, proposed, contributions);
+  if (!userContent) {
+    if (!imageB64) return null;
+    userContent = "Recent conversation transcript:\n\n(none yet)";
+  }
   return SCAN_PROVIDER === "nemotron"
     ? scanWithNemotron(userContent)
-    : scanWithAnthropic(userContent);
+    : scanWithAnthropic(userContent, imageB64);
 }
 
 // ───────────────────────── HTTP ─────────────────────────
@@ -281,8 +310,63 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && p === "/api/scan") {
       const body = await readJson(req);
-      const opportunity = await scanForOpportunity(body.transcript, body.proposed);
+      const { transcript, proposed, contributions, imageB64 } = body;
+      const opportunity = await scanForOpportunity(transcript, proposed, contributions, imageB64);
       return json(res, 200, { opportunity });
+    }
+
+    // ── live brainstorm sessions (stateful; glasses contribute into the active one) ──
+    if (req.method === "POST" && p === "/api/brainstorms") {
+      const body = await readJson(req);
+      const now = Date.now();
+      const id = "bs_" + now.toString(36) + Math.random().toString(36).slice(2, 6);
+      brainstorms.set(id, {
+        id,
+        title: body.title || "Brainstorm",
+        status: "active",
+        contributions: [],
+        createdAt: now,
+        updatedAt: now,
+      });
+      console.log("brainstorm: created", id, "—", brainstorms.get(id).title);
+      return json(res, 200, { id });
+    }
+
+    if (req.method === "POST" && p === "/api/brainstorms/active/end") {
+      const b = activeBrainstorm();
+      if (b) { b.status = "ended"; b.updatedAt = Date.now(); console.log("brainstorm: ended", b.id); }
+      return json(res, 200, { ok: true });
+    }
+
+    if (req.method === "POST" && p === "/api/brainstorms/active/contribute") {
+      const body = await readJson(req);
+      const b = activeBrainstorm();
+      if (!b) return json(res, 409, { error: "no active brainstorm" });
+      const text = body.text || (body.audioB64
+        ? await transcribe(Buffer.from(body.audioB64, "base64"), "contribution.m4a", body.audioType || "audio/m4a")
+        : "");
+      const contributionId = "c_" + Date.now().toString(36);
+      b.contributions.push({
+        id: contributionId,
+        text,
+        imageB64: body.imageB64 || null,
+        mode: "inject",
+        at: Date.now(),
+      });
+      b.updatedAt = Date.now();
+      console.log("brainstorm: contribution", contributionId, "->", b.id,
+        (body.imageB64 ? "[+photo] " : ""), JSON.stringify((text || "").slice(0, 200)));
+      return json(res, 200, { ok: true, contributionId });
+    }
+
+    {
+      const m = p.match(/^\/api\/brainstorms\/([^/]+)\/contributions$/);
+      if (req.method === "GET" && m) {
+        const b = brainstorms.get(m[1]);
+        if (!b) return json(res, 404, { error: "no such brainstorm" });
+        const since = Number(url.searchParams.get("since") || 0) || 0;
+        return json(res, 200, { contributions: b.contributions.filter(c => c.at > since) });
+      }
     }
 
     if (req.method === "POST" && p === "/api/ask-text") {

@@ -31,6 +31,19 @@ enum WiserConfig {
     get { UserDefaults.standard.string(forKey: key) ?? defaultURL }
     set { UserDefaults.standard.set(newValue, forKey: key) }
   }
+
+  // The "ambient" brainstorm server is a SEPARATE host (a fixed ngrok tunnel to the laptop's
+  // local server), distinct from the Firebase backend above. Only the Brainstorm contribute
+  // flow hits this; Ask/Build keep hitting `backendURL`. Hardcoded default so the Brainstorm
+  // tab works on a fresh build with no setup — still overridable in that tab's URL field.
+  // Key bumped to ".v2" so any stale URL pasted by an earlier build is dropped and this
+  // default takes effect on next launch.
+  private static let ambientKey = "wiser.ambientURL.v2"
+  static let defaultAmbientURL = "https://preengineering-landon-findable.ngrok-free.dev"
+  static var ambientURL: String {
+    get { UserDefaults.standard.string(forKey: ambientKey) ?? defaultAmbientURL }
+    set { UserDefaults.standard.set(newValue, forKey: ambientKey) }
+  }
 }
 
 // MARK: - Backend contract (mirrors backend/src/types.ts)
@@ -336,10 +349,10 @@ final class WiserViewModel {
   /// Each case's onClick is delivered back to the app by MWDATDisplay so the
   /// Meta Neural Band tap can drive the whole loop hands-on-glasses.
   private enum CardControl {
-    case ask    // idle/ready  -> tap starts listening
-    case stop   // listening   -> tap stops & sends
-    case again  // answer shown -> tap asks again
-    case none   // thinking / no control
+    case ask        // idle/ready  -> tap starts listening
+    case stop       // listening   -> tap stops & sends
+    case again      // answer shown -> tap asks again
+    case none       // thinking / no control
   }
 
   /// Hop the @Sendable onClick/onTap closure back onto the main actor and run

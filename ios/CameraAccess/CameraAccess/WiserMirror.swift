@@ -142,6 +142,9 @@ final class WiserMirror: @unchecked Sendable {
     queue.async { [weak self] in self?.latestCardJSON = "{}" }
   }
 
+  /// Latest glasses POV frame as JPEG, for brainstorm contributions. Best-effort.
+  func latestFrameJPEG() -> Data? { queue.sync { latestJPEG } }
+
   // MARK: - Connection handling
 
   private func handle(_ conn: NWConnection) {

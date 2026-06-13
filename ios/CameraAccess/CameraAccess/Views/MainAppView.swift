@@ -31,6 +31,8 @@ struct MainAppView: View {
           .tabItem { Label("Build", systemImage: "hammer") }
         WiserView(wearables: wearables)
           .tabItem { Label("Ask", systemImage: "waveform") }
+        BrainstormView(wearables: wearables)
+          .tabItem { Label("Brainstorm", systemImage: "lightbulb") }
         StreamSessionView(wearables: wearables, wearablesVM: viewModel)
           .tabItem { Label("Camera", systemImage: "camera") }
       }
