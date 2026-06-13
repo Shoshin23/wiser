@@ -13,7 +13,11 @@ user-invocable: true
 **effective workflow pattern for using state-of-the-art coding agents**. A working app is *evidence*, not
 the goal. Every decision should answer the three questions below.
 
-## The three questions every submission must answer
+## The core question (official phrasing)
+
+> **What agentic system or workflow did you design, why does it work, and what evidence shows that it works?**
+
+Which breaks into the three things every submission must answer:
 
 1. **What workflow did you design?**
 2. **Why does it work?**
@@ -31,11 +35,8 @@ A **public GitHub repository** with a concise overview — think short README / 
 - **Key architectural decisions**
 - **Evidence** — benchmarks, evals, metrics, or learnings
 
-Plus a **live demo + Q&A**.
-
-> ⚠️ **Timing discrepancy — confirm with organizers.** The written brief says **3-min demo + 2-min Q&A**;
-> the *Deliverable* slide says **2-min demo + 1-min Q&A**. Plan/rehearse to the **shorter** (2+1) to be
-> safe, with extra material ready if it's 3+2.
+Plus a **live demo + Q&A**: **2 minutes to demo, 1 minute Q&A** (confirmed in the official email). The
+**demo format is completely open** — show the workflow pattern however lands best. Rehearse to a tight 2:00.
 
 ## Judging criteria (from the Criteria slide)
 
@@ -96,6 +97,31 @@ To score against the criteria above, make sure the build produces:
 - [ ] **The one-pager README** — written alongside the build: what / workflow / architecture / evidence.
 - [ ] **A tight 2-minute demo** that *shows the workflow pattern* and the data, ending on "why it matters."
 
+## Logistics & schedule
+
+- **Host:** Whale, at the **Fiberplane / NP-Hard Ventures** offices, **Raadhuisstraat 50, Amsterdam**.
+- **Day:** Saturday. Single-day build → demos in the evening.
+- **Schedule:**
+  - 09:00–09:30 — Walk-in & registration
+  - 09:45–10:30 — Opening session (theme, partners & tooling)
+  - 12:45–13:30 — Lunch
+  - 18:00–18:45 — Dinner
+  - **19:00–20:00 — Demos** (the deadline to build against)
+  - 20:00 onwards — Drinks
+- **Discord channels:** `#anthropic-support`, `#token-factory-support` (Nebius/Nemotron), `#resources`.
+- Photos/video may be shared on social/partner sites; opt out with organizers if needed.
+
+## Partner credits & tooling (redeem ASAP — expire after the event)
+
+- **Anthropic — $600/participant.** Redeem with your **personal email** (company/non-standard domains may be
+  rejected) and your **Console ID**. Credits can take time to appear → redeem early. For `wiser` this funds
+  the **Claude Agent SDK** coding fleet.
+- **Nebius — $100/participant.** More available on request during the event. The **Nemotron cookbook** and
+  resources are in `#token-factory-support`. This is the **Nemotron Ultra** budget for the fast
+  translate/distill steps — and the raw material for a cost-quality experiment (cheap Nemotron agents vs a
+  Fable/Opus-class Claude agent).
+
 ## Sources
 
-Hackathon brief + Deliverable/Criteria slides (provided by organizers, captured 2026-06-13).
+- Official "Final Hackathon Details" email — Whale team (captured 2026-06-13).
+- Hackathon brief + Deliverable/Criteria slides (provided by organizers).
