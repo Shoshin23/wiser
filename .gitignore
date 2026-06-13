@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+dist/
+build/
+*.log
+.DS_Store
+.vercel/
+ios-dat/**/.build/
+ios-dat/**/DerivedData/
+sample.webm
