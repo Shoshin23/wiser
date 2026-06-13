@@ -24,3 +24,6 @@ ios/**/build/
 *.xcuserstate
 
 sample.webm
+
+# eval harness data/artifacts
+backend/eval-data/
