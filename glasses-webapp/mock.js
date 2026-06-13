@@ -19,7 +19,7 @@
     var pending = null;        // resolve fn while we await a steer
     var hud = {
       loop: "goal", iter: 1,
-      exit: { label: "benches green", have: 5, need: 8 },
+      exit: { label: "a working tracker", have: 0, need: 5 },
       costUsd: 0.0, elapsedSec: 0, status: "running",
     };
     var clock = null, started = 0;
@@ -30,8 +30,10 @@
     function on(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return api; }
 
     function pushHud(patch) {
+      // Merge a partial exit into the EXISTING exit before Object.assign clobbers
+      // it — otherwise exit:{have:2} wipes label/need and blanks the ambient.
+      if (patch && patch.exit) patch = Object.assign({}, patch, { exit: Object.assign({}, hud.exit, patch.exit) });
       Object.assign(hud, patch);
-      if (patch && patch.exit) hud.exit = Object.assign({}, hud.exit, patch.exit);
       emit("hud", clone(hud));
       if (patch && patch.status) emit("status", hud.status);
     }
@@ -52,129 +54,144 @@
 
     var act = function (verb, target, note) { pushHud({ activity: { verb: verb, target: target, note: note } }); };
 
+    // Precise, recording-friendly beats. T() is the dwell after each step (ms),
+    // tuned so the statusline/cards read cleanly in the hero GIF. Maps 1:1 to the
+    // README "day in the life": say it → works silently → meeting catch → the one
+    // decision → result.
+    var T = {
+      beat: 1500,   // a working step the eye should catch in the statusline
+      quick: 900,   // a fast follow-up
+      settle: 700,  // small breath before a takeover card
+      preAsk: 1200, // hold calm just before an interruption
+      readDone: 1700, // let the summary card land
+    };
+
     async function run() {
       startClock();
-      pushHud({ status: "running", iter: 1, tokens: 0, exit: { label: "benches green", have: 5, need: 8 } });
+      pushHud({ status: "running", iter: 1, tokens: 0, exit: { label: "a working tracker", have: 0, need: 5 } });
 
-      // ── working: the firehose, compressed to the rolling statusline ──────
-      act("plan", "planning", "scoping the hot loop");
-      await wait(800);
-      act("read", "levenshtein.rs");
-      await wait(700);
-      pushHud({ tokens: 2100, costUsd: 0.008 });
-      pushCard({ kind: "explain", headline: "Hot loop in levenshtein.rs",
-        oneLiner: "criterion baseline 412 ns — the byte-pair scan dominates. Fanning out 6 cheap agents." });
+      // ── 1+2. "build a small Linear" → it works silently (rolling statusline) ──
+      act("plan", "planning", "scaffolding the app");
+      await wait(T.beat);
+      act("read", "package.json");
+      await wait(T.quick);
+      pushHud({ tokens: 1800, costUsd: 0.006 });
+      pushCard({ kind: "explain", headline: "Building a small issue tracker",
+        oneLiner: "Vite + React + a local store. Fanning out 4 cheap agents." });
 
-      await wait(900);
-      act("edit", "levenshtein.rs", "SIMD lane");
-      await wait(900);
-      pushHud({ tokens: 3800, costUsd: 0.014 });
-      pushCard({ kind: "diff", files: 1, added: 14, removed: 9,
-        summary: "Replaced the inner byte-pair scan with a SIMD lane." });
+      await wait(T.beat);
+      act("edit", "IssueList.tsx", "list + create form");
+      await wait(T.beat);
+      pushHud({ tokens: 3600, costUsd: 0.012, exit: { have: 2 } });
+      pushCard({ kind: "diff", files: 3, added: 128, removed: 0,
+        summary: "Issue list, create form, and a local store." });
 
-      await wait(800);
-      act("test", "cargo bench");
-      await wait(900);
-      pushHud({ tokens: 4200, costUsd: 0.018 });
-      pushCard({ kind: "tests", passed: 5, total: 8, failing: ["bench_long", "bench_unicode", "bench_ascii"] });
+      await wait(T.beat);
+      act("test", "vitest");
+      await wait(T.quick);
+      pushHud({ tokens: 4200, costUsd: 0.016, exit: { have: 3 } });
+      pushCard({ kind: "tests", passed: 4, total: 5, failing: ["create issue"] });
 
-      // ── intermediate checkpoint (cost + session tokens) ─────────────────
-      await wait(600);
-      pushCard({ kind: "checkpoint", progress: "5 / 8 benches", iter: 1, tokens: 4200, usd: 0.018,
-        note: "412 → 96 ns so far" });
+      // ── intermediate checkpoint (where are we) ──────────────────────────
+      await wait(T.settle);
+      pushCard({ kind: "checkpoint", progress: "3 / 5 built", iter: 1, tokens: 4200, usd: 0.016,
+        note: "list + form rendering" });
 
-      await wait(900);
-      pushHud({ status: "judging", tokens: 5200, costUsd: 0.024, exit: { have: 6 } });
-      act("judge", "verifier", "412 → 96 ns");
-      pushCard({ kind: "explain", headline: "412 ns → 96 ns  (4.3×)",
-        oneLiner: "criterion-verified; one bench still over budget." });
+      // ── 3. in a meeting — work catches itself ───────────────────────────
+      await wait(2900);   // ride out the checkpoint card (auto-dismiss 2800ms)
+      pushHud({ status: "awaiting_human", activity: { verb: "wait", target: "heard a task" } });
+      pushCard({ kind: "question", prompt: 'Heard in your meeting — capture "add SSO for the launch"?',
+        options: ["Capture it", "Not now"] });
+      var cap = pickIndex(await waitForSteer());
 
-      // ── uncertainty → ask the human (the steer point) ───────────────────
-      await wait(900);
+      pushHud({ status: "running", activity: { verb: "plan", target: cap === 0 ? "filed the issue" : "skipped it" } });
+      if (cap === 0) pushCard({ kind: "explain", headline: "Filed: add SSO for the launch",
+        oneLiner: "Queued as the first issue in the tracker being built." });
+
+      await wait(T.beat);
+      act("edit", "store.ts", "seed first issue");
+      await wait(T.quick);
+      pushHud({ tokens: 6400, costUsd: 0.022, exit: { have: 4 } });
+
+      // ── 4. the one interruption that matters ────────────────────────────
+      await wait(T.preAsk);
       pushHud({ status: "awaiting_human", activity: { verb: "wait", target: "needs you" } });
-      pushCard({ kind: "question", prompt: "Two candidates beat target — ship which?",
-        options: ["SIMD lanes (5.3×)", "Lookup table (3.1×)"] });
-
-      var choice = interpretSteer(await waitForSteer());
+      pushCard({ kind: "question", prompt: "Keep issues local, or sync a real backend?",
+        options: ["Keep it local", "Sync a backend"] });
+      var choice = interpretBackend(await waitForSteer());
 
       // ── visibly change course based on the steer ────────────────────────
-      pushHud({ status: "retrying", iter: 2, exit: { have: 6 } });
-      act("edit", "levenshtein.rs", choice.label);
-      await wait(1200);
-      pushHud({ tokens: 8600, costUsd: 0.031, exit: { have: 7 } });
-      pushCard({ kind: "diff", files: 1, added: choice.added, removed: 4, summary: choice.diffSummary });
+      pushHud({ status: "retrying", iter: 2 });
+      act("edit", choice.file, choice.note);
+      await wait(T.beat);
+      pushHud({ tokens: 8800, costUsd: 0.03 });
+      pushCard({ kind: "diff", files: choice.files, added: choice.added, removed: 2, summary: choice.diffSummary });
 
-      await wait(800);
-      act("test", "cargo bench");
+      await wait(T.quick);
+      act("test", "vitest");
       pushHud({ status: "judging" });
-      await wait(700);
-      pushCard({ kind: "tests", passed: 7, total: 8, failing: ["bench_unicode"] });
+      await wait(T.quick);
+      pushHud({ tokens: 10200, costUsd: 0.04, exit: { have: 5 } });
+      pushCard({ kind: "tests", passed: 5, total: 5, failing: [] });
 
-      await wait(900);
-      pushHud({ status: "retrying", iter: 3, tokens: 10800, costUsd: 0.038 });
-      act("edit", "levenshtein.rs", "NFC normalize");
-      await wait(900);
-      pushCard({ kind: "diff", files: 1, added: 6, removed: 1, summary: "NFC-normalize before the lane — fixes the unicode bench." });
-
-      await wait(800);
-      act("test", "cargo bench");
-      pushHud({ status: "judging", tokens: 12400, costUsd: 0.04, exit: { have: 8 } });
-      await wait(800);
-      pushCard({ kind: "tests", passed: 8, total: 8, failing: [] });
-
-      // ── work done: the "how much got done" summary card ─────────────────
-      await wait(700);
-      pushHud({ status: "done", activity: { verb: "done", target: "goal met" } });
-      pushCard({ kind: "done", headline: choice.finalHeadline,
+      // ── 5. work done: the "how much got done" summary ───────────────────
+      await wait(T.settle);
+      pushHud({ status: "done", activity: { verb: "done", target: "shipped" } });
+      pushCard({ kind: "done", headline: "Issue tracker — built",
         stats: [
-          { label: "speedup", value: choice.label === "SIMD lanes" ? "5.3×" : "3.1×" },
-          { label: "benches", value: "8/8" },
-          { label: "iters", value: "3" },
-          { label: "tokens", value: "12.4k" },
+          { label: "files", value: "7" },
+          { label: "tests", value: "5/5" },
+          { label: "issues", value: "1" },
+          { label: "tokens", value: "10.2k" },
           { label: "cost", value: "$0.04" },
         ] });
 
-      await wait(1400);
-      pushCard({ kind: "question", prompt: "Goal met — ship it?", options: ["Approve & ship", "Keep iterating"] });
-      var ship = interpretSteer(await waitForSteer());
+      await wait(T.readDone);
+      pushHud({ status: "awaiting_human", activity: { verb: "wait", target: "ship it" } });
+      pushCard({ kind: "question", prompt: "Done — ship it?", options: ["Approve & ship", "Keep iterating"] });
+      var ship = pickIndex(await waitForSteer());
       stopClock();
 
-      if (ship.index === 1) {
+      if (ship === 1) {
         pushHud({ status: "running", activity: { verb: "plan", target: "another pass" } });
         pushCard({ kind: "explain", headline: "Back to the loop", oneLiner: "Re-opening the goal loop for another pass." });
         emit("done", clone(hud));
         return;
       }
       // ── final screen ────────────────────────────────────────────────────
-      pushCard({ kind: "done", final: true, headline: choice.finalHeadline,
+      pushCard({ kind: "done", final: true, headline: "A working issue tracker, hands-free",
         subline: "$0.04 · ~1/16 the cost of one Opus run",
         stats: [
-          { label: "merged", value: "PR #128" },
-          { label: "benches", value: "8/8" },
+          { label: "first issue", value: "add SSO" },
+          { label: "tests", value: "5/5" },
           { label: "cost", value: "$0.04" },
         ] });
       emit("done", clone(hud));
     }
 
-    // Map a steer onto one of the current question's branches.
-    function interpretSteer(steer) {
-      var idx = 0;
-      if (steer && steer.type === "gesture") {
-        idx = steer.action === "reject" ? 1 : 0;   // approve → 0, reject → 1
-      } else if (steer && steer.type === "voice") {
+    // approve → 0, reject → 1 (with a light voice fallback).
+    function pickIndex(steer) {
+      if (steer && steer.type === "gesture") return steer.action === "reject" ? 1 : 0;
+      if (steer && steer.type === "voice") {
         var t = (steer.text || "").toLowerCase();
-        // voice can override: mention of lookup/table/second/B → option 1
-        if (/lookup|table|second|option b|\bb\b/.test(t)) idx = 1;
-        else if (/simd|lane|first|option a|fast|\ba\b/.test(t)) idx = 0;
-        else if (/keep|iterate|again|no\b/.test(t)) idx = 1;
+        if (/not now|skip|no\b|later|keep iterat/.test(t)) return 1;
+      }
+      return 0;
+    }
+
+    // The one real decision: local store vs a synced backend.
+    function interpretBackend(steer) {
+      var idx = (steer && steer.type === "gesture") ? (steer.action === "reject" ? 1 : 0) : 0;
+      if (steer && steer.type === "voice") {
+        var t = (steer.text || "").toLowerCase();
+        if (/backend|sync|server|auth|database|\bdb\b|cloud/.test(t)) idx = 1;
+        else if (/local|simple|keep|now/.test(t)) idx = 0;
       }
       var branches = [
-        { index: 0, label: "SIMD lanes", detail: "Vectorize the hot loop — 5.3× on the long bench.",
-          added: 18, diffSummary: "SIMD-lane levenshtein; 4 lanes per step.",
-          finalHeadline: "412 ns → 78 ns  (5.3× faster)" },
-        { index: 1, label: "Lookup table", detail: "Precompute the cost table — simpler, 3.1× faster.",
-          added: 22, diffSummary: "Lookup-table levenshtein; no SIMD intrinsics.",
-          finalHeadline: "412 ns → 133 ns  (3.1× faster)" },
+        { index: 0, label: "local", file: "store.ts", note: "localStorage persistence",
+          files: 1, added: 24, diffSummary: "Persist issues to localStorage — no backend, ships now." },
+        { index: 1, label: "backend", file: "api.ts", note: "Firestore + auth",
+          files: 4, added: 96, diffSummary: "Synced backend: Firestore + auth + an API client." },
       ];
       return branches[idx] || branches[0];
     }
