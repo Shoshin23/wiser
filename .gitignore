@@ -27,3 +27,6 @@ sample.webm
 
 # eval harness data/artifacts
 backend/eval-data/
+
+# Toy demo target — lives in its own repo (github.com/Evgastap/linny)
+toy-linear/
