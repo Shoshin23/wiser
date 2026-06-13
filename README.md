@@ -17,9 +17,10 @@ Voice-driven Claude managed agents, surfaced as cards on Meta Ray-Ban **Display*
 
 | Path | What |
 |------|------|
-| `backend/` | Node + TypeScript orchestrator. The pipeline lives here. Run long-running (not serverless). |
-| `glasses-webapp/` | Vanilla-JS Meta Display webapp (dark theme, D-pad nav). Deploy static to Vercel. |
-| `ios-dat/` | Minimal iOS DAT stub (deferred — see its README). |
+| `ios/CameraAccess/` | **Native iOS DAT app — the real glasses client. ALL iOS work goes here.** Open `CameraAccess.xcodeproj`; the wiser flow is in `CameraAccess/Wiser.swift`. (Moved out of the `meta-display-experiments` repo — that copy is no longer used.) |
+| `firebase/` | Serverless backend the iOS app calls (Anthropic Messages API + Groq STT/TTS), deployed to `wiser-1a319` at `https://us-central1-wiser-1a319.cloudfunctions.net/wiser`. |
+| `backend/` | Node + TypeScript orchestrator (Claude Agent SDK). The local/LAN version of the pipeline. |
+| `glasses-webapp/` | Vanilla-JS Meta Display webapp — **deprecated**: the Display web SDK can't access camera/mic/audio, so the native iOS app is the glasses client. |
 
 The frontend↔backend contract is `AskResponse` in `backend/src/types.ts` (`transcript`, `answer`, `audioChunks[]`, `card{title,summary}`). The `glasses-webapp` mirrors it.
 

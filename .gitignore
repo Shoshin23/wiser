@@ -17,8 +17,10 @@ build/
 .DS_Store
 .vercel/
 
-# iOS build artifacts
-ios-dat/**/.build/
-ios-dat/**/DerivedData/
+# iOS / Xcode build artifacts
+ios/**/build/
+**/DerivedData/
+**/xcuserdata/
+*.xcuserstate
 
 sample.webm
