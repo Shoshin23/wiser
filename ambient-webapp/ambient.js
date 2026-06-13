@@ -160,6 +160,20 @@
     els.transcript.scrollTop = els.transcript.scrollHeight;
   }
 
+  // Render a glasses contribution in the transcript pane so there's visible on-screen
+  // confirmation. It still feeds the scan separately; this is purely for the human.
+  function appendContribution(text, hasImage) {
+    if (els.transcript.querySelector(".transcript-empty")) els.transcript.innerHTML = "";
+    var prev = els.transcript.querySelector(".t-line.latest");
+    if (prev) prev.classList.remove("latest");
+    var n = document.createElement("div");
+    n.className = "t-line latest t-contrib";
+    n.style.color = "#86e3d6"; // accent — stands out from the ambient mic transcript
+    n.textContent = "👓 " + (hasImage ? "glasses (+ photo): " : "glasses: ") + (text || "(photo only)");
+    els.transcript.appendChild(n);
+    els.transcript.scrollTop = els.transcript.scrollHeight;
+  }
+
   /* ---------- scanner ---------- */
   async function maybeScan() {
     if (!state.listening || state.scanInFlight) return;
@@ -175,6 +189,10 @@
           var contribs = (cdata && cdata.contributions) || [];
           if (contribs.length) {
             contribTexts = contribs.map(function (c) { return c.text; }).filter(Boolean);
+            // Show each new glasses contribution on screen right away.
+            contribs.forEach(function (c) {
+              if (c.text || c.imageB64) appendContribution(c.text, !!c.imageB64);
+            });
             // use the LAST contribution that carries a photo
             for (var i = contribs.length - 1; i >= 0; i--) {
               if (contribs[i].imageB64) { contribImage = contribs[i].imageB64; break; }

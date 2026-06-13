@@ -389,7 +389,9 @@ const server = http.createServer(async (req, res) => {
       if (!filePath.startsWith(__dirname)) { res.writeHead(403); return res.end("forbidden"); }
       return fs.readFile(filePath, (err, content) => {
         if (err) { res.writeHead(404, { "Content-Type": "text/html" }); return res.end("<h1>404</h1>"); }
-        res.writeHead(200, { "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream" });
+        // no-store: this is a fast-iterating demo app — never let the browser serve a stale
+        // ambient.js/index.html, or UI fixes silently won't show up after a plain reload.
+        res.writeHead(200, { "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream", "Cache-Control": "no-store" });
         res.end(content);
       });
     }

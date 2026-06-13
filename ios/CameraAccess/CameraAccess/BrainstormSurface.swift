@@ -192,13 +192,19 @@ final class BrainstormViewModel {
     }
     do {
       let session = AVAudioSession.sharedInstance()
-      // Allow the glasses' Bluetooth output; no .defaultToSpeaker. Pin INPUT to the phone's
-      // built-in mic so recording quality stays high (not a low-bitrate Bluetooth HFP mic).
-      try session.setCategory(.playAndRecord, mode: .default, options: GlassesAudioRoute.categoryOptions)
+      // Capture from the GLASSES mic. The glasses present as a Bluetooth HFP headset (8kHz mono).
+      // HFP INPUT requires `.allowBluetooth` AND `mode: .voiceChat` — on iOS 17+, `mode: .default`
+      // + `.allowBluetooth` often fails to select the BT input and silently falls back to the
+      // phone mic. `.voiceChat` engages the 2-way HFP link; then pin the preferred input to the
+      // HFP port. Fall back to the phone's built-in mic only if no glasses mic is present.
+      try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
       try session.setActive(true)
-      if let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-        try? session.setPreferredInput(builtInMic)
+      let inputs = session.availableInputs ?? []
+      let glassesMic = inputs.first { $0.portType == .bluetoothHFP }
+      if let mic = glassesMic ?? inputs.first(where: { $0.portType == .builtInMic }) {
+        try? session.setPreferredInput(mic)
       }
+      DATLog.log.info("[brainstorm] mic = \(glassesMic != nil ? "glasses (HFP)" : "phone (built-in)", privacy: .public) | available inputs: \(inputs.map { $0.portType.rawValue }.joined(separator: ", "), privacy: .public)")
 
       let url = FileManager.default.temporaryDirectory.appendingPathComponent("wiser-contribution.m4a")
       try? FileManager.default.removeItem(at: url)
