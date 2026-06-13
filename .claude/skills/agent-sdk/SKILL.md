@@ -9,7 +9,8 @@ user-invocable: true
 
 The fleet = **many autonomous Claude coding agents**, each in its own sandbox, orchestrated from a backend.
 We build on the **Claude Agent SDK** ("Claude Code as a library"), **not** the low-level `anthropic` client
-and **not** Anthropic's hosted Managed Agents — *we* own the loop and the gVisor sandboxes (our sandbox proxy).
+and **not** Anthropic's hosted Managed Agents — *we* own the loop and the gVisor sandboxes (reusing our
+existing per-env sandbox proxy).
 
 > For model IDs / pricing / first-party `anthropic` SDK, the `claude-api` skill is authoritative. This skill
 > is specifically the **Agent SDK** (`@anthropic-ai/claude-agent-sdk` / `claude-agent-sdk`), which the
