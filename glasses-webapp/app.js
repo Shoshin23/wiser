@@ -39,7 +39,7 @@
     setView("home");
   }
   function cache() {
-    ["home","goals","goals-body","goals-task","team","team-body","team-title",
+    ["home","goals","goals-body","goals-task","team","team-body","team-title","analytics","analytics-body",
      "ambient","task-name","iter","goal-label","bar-fill","goal-count","decision",
      "sl-status","sl-act","sl-note","sl-cost","statusline","hint","detail","detail-body",
      "voice","voice-label","voice-text","start","mode-badge"].forEach(function (id) {
@@ -50,12 +50,13 @@
   /* ---------- view router (one screen at a time on the lens) ---------- */
   function setView(v) {
     state.view = v;
-    hide(els.home); hide(els.goals); hide(els.team); hide(els.start);
+    hide(els.home); hide(els.goals); hide(els.team); hide(els.analytics); hide(els.start);
     hide(els.detail); hide(els.voice);
     var loopCore = [els.ambient, els.statusline, els.hint];
     if (v === "home") { show(els.home); hide(els.decision); loopCore.forEach(hide); }
     else if (v === "goals") { show(els.goals); hide(els.decision); loopCore.forEach(hide); }
     else if (v === "team") { show(els.team); hide(els.decision); loopCore.forEach(hide); }
+    else if (v === "analytics") { show(els.analytics); hide(els.decision); loopCore.forEach(hide); }
     else { loopCore.forEach(show); }   // loop: moment logic owns ambient↔decision
     paintHint();
   }
@@ -67,9 +68,9 @@
     var strip = W.el("div", "mc-strip");
     strip.appendChild(mcStat(String(m.running), "running", "var(--accent)", false));
     strip.appendChild(mcStat(String(m.blocked), "needs you", "var(--attn)", m.blocked > 0));
-    strip.appendChild(mcStat("$" + m.burnUsd.toFixed(2), "/ hr", "var(--gold)", false));
+    strip.appendChild(mcStat("$" + (m.spendUsd || 0).toFixed(2), "spent", "var(--gold)", false));
     body.appendChild(strip);
-    body.appendChild(W.el("div", "mc-sub", m.tokRate + "  ·  " + f.sessions.length + " sessions"));
+    body.appendChild(W.el("div", "mc-sub", W.fmtTokens(m.totalTokens || 0) + "  ·  " + f.sessions.length + " sessions"));
 
     var list = W.el("div", "sess-list");
     // Sort by attention: what needs you floats up, finished work sinks — so the
@@ -82,7 +83,7 @@
       row.appendChild(dot);
       var main = W.el("div", "sess-main");
       main.appendChild(W.el("div", "sess-task", s.task));
-      main.appendChild(W.el("div", "sess-meta", statusVerb(s.status) + " · iter " + s.iter + " · " + s.model));
+      main.appendChild(W.el("div", "sess-meta", statusVerb(s.status) + " · " + s.model + " · " + s.result));
       row.appendChild(main);
       var res = W.el("div", "sess-res");
       res.appendChild(W.el("div", "sess-res-v", s.result));
@@ -97,9 +98,62 @@
     nmain.appendChild(W.el("div", "sess-meta", "voice a task for the fleet"));
     nrow.appendChild(nmain);
     list.appendChild(nrow);
+    // fleet evidence — cost × quality + evaluations
+    var arow = W.el("div", "sess-row new focusable"); arow.tabIndex = 0; arow.dataset.action = "analytics";
+    arow.appendChild(W.el("span", "sess-dot plus", "▦"));
+    var amain = W.el("div", "sess-main");
+    amain.appendChild(W.el("div", "sess-task", "Cost × Quality"));
+    amain.appendChild(W.el("div", "sess-meta", "fleet spend · pass rate · evals"));
+    arow.appendChild(amain);
+    list.appendChild(arow);
     body.appendChild(list);
 
     var first = body.querySelector(".focusable"); if (first) first.focus();
+  }
+
+  /* ---------- ANALYTICS: fleet cost × quality + evaluations (glanceable) ---------- */
+  function openAnalytics() {
+    var f = W.FLEET, body = els.analyticsBody;
+    body.innerHTML = "";
+    // derived evidence: actual fleet spend vs the same token usage priced at Opus
+    var fleetSpend = f.mission.spendUsd || 0;
+    var allOpus = f.sessions.reduce(function (a, s) { return a + W.agentCost("opus", s.goal.metrics.usage); }, 0);
+    var ratio = fleetSpend ? allOpus / fleetSpend : 0;
+    var avgPass = Math.round(f.sessions.reduce(function (a, s) { return a + s.goal.pct; }, 0) / f.sessions.length);
+    var greenN = f.sessions.filter(function (s) { return s.goal.pct === 100; }).length;
+
+    var hero = W.el("div", "an-hero");
+    hero.appendChild(W.el("span", "an-ratio", "~" + ratio.toFixed(0) + "×"));
+    hero.appendChild(W.el("span", "an-ratio-l", "cheaper than all-Opus, same work"));
+    body.appendChild(hero);
+
+    var tiles = W.el("div", "gtiles");
+    tiles.appendChild(gtile("spent", "$" + fleetSpend.toFixed(2)));
+    tiles.appendChild(gtile("all-opus", "$" + allOpus.toFixed(2)));
+    tiles.appendChild(gtile("tokens", W.fmtTokens(f.mission.totalTokens || 0)));
+    tiles.appendChild(gtile("avg pass", avgPass + "%"));
+    body.appendChild(tiles);
+
+    var blk = W.el("div", "block");
+    blk.appendChild(W.el("div", "block-l", "per session · model · cost · pass"));
+    f.sessions.forEach(function (s) {
+      var m = s.goal.metrics, st = W.STATUS[s.status] || W.STATUS.running;
+      var row = W.el("div", "an-row");
+      var dot = W.el("span", "sess-dot"); dot.style.background = st.color; row.appendChild(dot);
+      row.appendChild(W.el("span", "an-task", s.task));
+      row.appendChild(W.el("span", "an-model", m.model));
+      row.appendChild(W.el("span", "an-cost", "$" + m.costUsd.toFixed(2)));
+      row.appendChild(W.el("span", "an-pass", s.goal.pct + "%"));
+      blk.appendChild(row);
+    });
+    body.appendChild(blk);
+
+    body.appendChild(W.el("div", "an-eval",
+      greenN + " / " + f.sessions.length + " goals green  ·  outcome eval (define_outcome) not wired yet"));
+
+    body.scrollTop = 0;
+    setView("analytics");
+    var b = els.analytics.querySelector(".back-btn"); if (b) b.focus();
   }
   // attention tiers: needs-you ▸ active ▸ done ▸ failed
   function attnRank(s) {
@@ -121,6 +175,7 @@
   function activateHome() {
     var el = document.activeElement;
     if (el && el.dataset && el.dataset.action === "new") { startPrompt(); return; }
+    if (el && el.dataset && el.dataset.action === "analytics") { openAnalytics(); return; }
     if (el && el.dataset && el.dataset.sid) { var s = W.findSession(el.dataset.sid); if (s) openSession(s); }
   }
 
@@ -143,46 +198,138 @@
     else if (s.status === "done" && s.done) showFinal(s.done);
   }
 
-  /* ---------- GOALS: goal progression / steps for the active session ---------- */
+  /* ---------- GOALS: goal progression as two lenses (↑/↓ flips) ----------
+     QUANT lens = numbers (steps, tests, rubric trend, cost).
+     QUAL  lens = the run → judge → retry narrative + definition-of-done + next.
+     Both share the title + % headline + a lens tab row.                     */
   function openGoals() {
     var s = state.activeSession; if (!s || !s.goal) return;
-    var g = s.goal, body = els.goalsBody;
+    state.goalLens = state.goalLens || "quant";
     els.goalsTask.textContent = s.task;
+    renderGoals();
+    setView("goals");
+    var b = els.goals.querySelector(".back-btn"); if (b) b.focus();
+  }
+  function toggleGoalLens(to) {
+    state.goalLens = to || (state.goalLens === "quant" ? "qual" : "quant");
+    renderGoals();
+  }
+  function renderGoals() {
+    var s = state.activeSession; if (!s || !s.goal) return;
+    var g = s.goal, lens = state.goalLens, body = els.goalsBody;
     body.innerHTML = "";
 
+    // lens tabs + % headline
+    var head = W.el("div", "goal-tabs");
+    var t1 = W.el("span", "goal-tab" + (lens === "quant" ? " on" : ""), "quant"); t1.dataset.action = "lens-quant";
+    var t2 = W.el("span", "goal-tab" + (lens === "qual" ? " on" : ""), "qual");   t2.dataset.action = "lens-qual";
+    head.appendChild(t1); head.appendChild(t2);
+    head.appendChild(W.el("span", "goal-pct-big", g.pct + "%"));
+    body.appendChild(head);
     body.appendChild(W.el("div", "goal-title", g.title));
     var overall = W.el("div", "goal-overall");
     var track = W.el("span", "goal-track"); var fill = W.el("i"); fill.style.width = g.pct + "%"; track.appendChild(fill);
-    overall.appendChild(track); overall.appendChild(W.el("span", "goal-pct", g.pct + "%"));
+    overall.appendChild(track);
     body.appendChild(overall);
 
-    if (g.attempts && g.attempts.length) {
-      var at = W.el("div", "block");
-      at.appendChild(W.el("div", "block-l", "attempts · run → judge → retry"));
-      var line = W.el("div", "attempts");
-      g.attempts.forEach(function (a) {
-        var as = attemptStatus(a.r);
-        var node = W.el("div", "attempt");
-        var ic = W.el("span", "attempt-ic", as.icon); ic.style.color = as.color;
-        if (as.pulse) ic.classList.add("pulse");
-        node.appendChild(ic); node.appendChild(W.el("span", "attempt-tx", a.t));
-        line.appendChild(node);
-      });
-      at.appendChild(line); body.appendChild(at);
+    if (lens === "quant") renderQuant(body, g); else renderQual(body, g);
+
+    body.appendChild(W.el("div", "goal-flip", "↑↓  flip to " + (lens === "quant" ? "qual" : "quant")));
+    body.scrollTop = 0;
+  }
+
+  // QUANT lens — only real SDK / agent-tool / derived metrics (see docs/sdk-metrics-alignment.md)
+  function renderQuant(body, g) {
+    var m = g.metrics || {}, u = m.usage || {};
+    // tiles: tests (report_tests) · tokens (Σ usage) · cost (derived) · cache-hit (derived)
+    var tiles = W.el("div", "gtiles");
+    tiles.appendChild(gtile("tests", m.tests ? m.tests.passed + "/" + m.tests.total : "—"));
+    tiles.appendChild(gtile("tokens", m.totalTokens != null ? W.fmtTokens(m.totalTokens) : "—"));
+    tiles.appendChild(gtile("cost", m.costUsd != null ? "$" + m.costUsd.toFixed(2) : "—"));
+    tiles.appendChild(gtile("cache", m.cacheHitRate != null ? Math.round(m.cacheHitRate * 100) + "%" : "—"));
+    body.appendChild(tiles);
+
+    // real meta: model id · model-request count · elapsed · diff
+    var pid = (W.PRICING[m.model] && W.PRICING[m.model].id) || m.model || "—";
+    body.appendChild(W.el("div", "gmeta",
+      pid + "  ·  " + (m.modelReqs || 0) + " model reqs  ·  " + W.fmtElapsed(m.elapsedSec || 0) +
+      "  ·  +" + (m.diff ? m.diff.added : 0) + " −" + (m.diff ? m.diff.removed : 0)));
+
+    // tests-passing per attempt (real: report_tests at each iteration)
+    var trend = (g.attempts || []).map(function (a) {
+      var p = String(a.tests || "").split("/"); return (p.length === 2 && +p[1]) ? (+p[0] / +p[1]) : 0;
+    });
+    if (trend.length) {
+      var blk = W.el("div", "block");
+      blk.appendChild(W.el("div", "block-l", "tests passing / attempt" +
+        (m.itersToGreen ? " · green at iter " + m.itersToGreen : " · not yet green")));
+      var spark = W.el("div", "spark");
+      trend.forEach(function (v) { var b = W.el("span", "spark-bar"); b.style.height = Math.max(8, Math.round(v * 100)) + "%"; spark.appendChild(b); });
+      blk.appendChild(spark); body.appendChild(blk);
     }
 
-    var subsBlk = W.el("div", "block");
-    subsBlk.appendChild(W.el("div", "block-l", "steps"));
-    g.subs.forEach(function (s2) {
-      var r = W.el("div", "subgoal");
-      r.appendChild(W.el("span", "subgoal-lab", s2.label));
-      var tr = W.el("span", "subgoal-track"); var fi = W.el("i"); fi.style.width = s2.pct + "%";
-      if (s2.pct >= 100) fi.classList.add("full"); tr.appendChild(fi); r.appendChild(tr);
-      r.appendChild(W.el("span", "subgoal-pct", s2.pct + "%"));
-      subsBlk.appendChild(r);
-    });
-    body.appendChild(subsBlk);
+    // token breakdown (real usage fields)
+    var tb = W.el("div", "block");
+    tb.appendChild(W.el("div", "block-l", "tokens · model_usage"));
+    var mx = Math.max(u.inputTokens || 0, u.outputTokens || 0, u.cacheReadTokens || 0, 1);
+    tb.appendChild(tokRow("input", u.inputTokens || 0, mx, "var(--accent)"));
+    tb.appendChild(tokRow("output", u.outputTokens || 0, mx, "var(--accent2)"));
+    tb.appendChild(tokRow("cache read", u.cacheReadTokens || 0, mx, "var(--muted)"));
+    body.appendChild(tb);
+  }
+  function tokRow(label, n, max, color) {
+    var r = W.el("div", "subgoal");
+    r.appendChild(W.el("span", "subgoal-lab", label));
+    var tr = W.el("span", "subgoal-track"); var fi = W.el("i");
+    fi.style.width = Math.round((n / max) * 100) + "%"; fi.style.background = color;
+    tr.appendChild(fi); r.appendChild(tr);
+    r.appendChild(W.el("span", "subgoal-pct", W.fmtTokens(n)));
+    return r;
+  }
 
+  function renderQual(body, g) {
+    // Outcome evaluation (SDK: span.outcome_evaluation_end.result) — the rubric/eval.
+    var m = g.metrics || {}, oc = m.outcome;
+    if (oc) {
+      var ev = W.el("div", "outcome" + (oc.satisfied ? " ok" : ""));
+      var sc = W.el("span", "outcome-score", oc.score != null ? oc.score.toFixed(2) : "—");
+      ev.appendChild(sc);
+      var oco = W.el("div", "outcome-col");
+      oco.appendChild(W.el("div", "outcome-l", "outcome eval" + (oc.maxIterations ? " · max " + oc.maxIterations + " iters" : "")));
+      oco.appendChild(W.el("div", "outcome-v", oc.satisfied ? "satisfied ✓" : "not satisfied" + (oc.wired === false ? "  · define_outcome not wired yet" : "")));
+      ev.appendChild(oco);
+      body.appendChild(ev);
+    }
+    // the run → judge → retry loop
+    if (g.attempts && g.attempts.length) {
+      var blk = W.el("div", "block");
+      blk.appendChild(W.el("div", "block-l", "run → judge → retry"));
+      g.attempts.forEach(function (a) {
+        var as = attemptStatus(a.r);
+        var row = W.el("div", "atmpt");
+        var ic = W.el("span", "atmpt-ic", as.icon); ic.style.color = as.color;
+        if (as.pulse) ic.classList.add("pulse");
+        row.appendChild(ic);
+        var col = W.el("div", "atmpt-col");
+        col.appendChild(W.el("div", "atmpt-result", a.result || a.t || ""));
+        if (a.judge) {
+          var j = W.el("div", "atmpt-judge"); j.style.color = as.color;
+          j.textContent = "judge: " + a.judge;
+          col.appendChild(j);
+        }
+        if (a.score != null || a.tests) {
+          var chips = W.el("div", "atmpt-chips");
+          if (a.score != null) chips.appendChild(W.el("span", "chip-score", (typeof a.score === "number" ? a.score.toFixed(2) : a.score)));
+          if (a.tests) chips.appendChild(W.el("span", "chip-tests", a.tests));
+          col.appendChild(chips);
+        }
+        row.appendChild(col);
+        blk.appendChild(row);
+      });
+      body.appendChild(blk);
+    }
+
+    // definition of done
     if (g.dod && g.dod.length) {
       var dod = W.el("div", "block");
       dod.appendChild(W.el("div", "block-l", "definition of done"));
@@ -195,9 +342,19 @@
       body.appendChild(dod);
     }
 
-    body.scrollTop = 0;
-    setView("goals");
-    var b = els.goals.querySelector(".back-btn"); if (b) b.focus();
+    // what the judge wants next
+    if (g.next) {
+      var nx = W.el("div", "goal-next");
+      nx.appendChild(W.el("span", "goal-next-l", "next →"));
+      nx.appendChild(W.el("span", "goal-next-t", g.next));
+      body.appendChild(nx);
+    }
+  }
+  function gtile(label, value) {
+    var t = W.el("div", "gtile");
+    t.appendChild(W.el("div", "gtile-v", value));
+    t.appendChild(W.el("div", "gtile-l", label));
+    return t;
   }
   function backFromGoals() { setView("loop"); paintAmbient(); paintStatusline(); }
   function attemptStatus(r) {
@@ -306,7 +463,7 @@
   /* ---------- session ---------- */
   async function startLoop() {
     if (state.running) return;
-    if (!state.activeSession) state.activeSession = W.findSession("lev");  // the live mock loop
+    if (!state.activeSession) state.activeSession = W.findSession("linear");  // the live mock loop
     setView("loop");
     var opened = await W.openSession();
     state.session = opened.session; state.mode = opened.mode;
@@ -518,11 +675,18 @@
       return;
     }
 
-    // GOALS — goal progression for the active session
+    // GOALS — two lenses; ↑/↓ flips quant ↔ qual, ⎋/← exits to the task
     if (state.view === "goals") {
       if (e.key === "Escape" || e.key === "ArrowLeft") { backFromGoals(); e.preventDefault(); }
-      else if (e.key === "ArrowDown") { els.goalsBody.scrollTop += 60; e.preventDefault(); }
-      else if (e.key === "ArrowUp") { els.goalsBody.scrollTop -= 60; e.preventDefault(); }
+      else if (e.key === "ArrowUp" || e.key === "ArrowDown") { toggleGoalLens(); e.preventDefault(); }
+      return;
+    }
+
+    // ANALYTICS — fleet evidence; ⎋/← back to fleet, ↑/↓ scroll
+    if (state.view === "analytics") {
+      if (e.key === "Escape" || e.key === "ArrowLeft") { setView("home"); var hf = els.home.querySelector(".focusable"); if (hf) hf.focus(); e.preventDefault(); }
+      else if (e.key === "ArrowDown") { els.analyticsBody.scrollTop += 60; e.preventDefault(); }
+      else if (e.key === "ArrowUp") { els.analyticsBody.scrollTop -= 60; e.preventDefault(); }
       return;
     }
 
@@ -582,7 +746,11 @@
     if (a === "start" || a === "new") startPrompt();
     else if (a === "back") closeDetail();
     else if (a === "goals-back") backFromGoals();
+    else if (a === "lens-quant") toggleGoalLens("quant");
+    else if (a === "lens-qual") toggleGoalLens("qual");
     else if (a === "team-back") backFromTeam();
+    else if (a === "analytics") openAnalytics();
+    else if (a === "analytics-back") { setView("home"); var hf = els.home.querySelector(".focusable"); if (hf) hf.focus(); }
     else if (a === "voice") startVoice();
   }
   function show(e){ if(e) e.classList.remove("hidden"); }

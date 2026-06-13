@@ -4,23 +4,23 @@
    so it's richer than the glasses surface — but shares the same palette/vocab. */
 
 :root {
-  --bg:        #050608;
-  --bg-2:      #07090d;
-  --panel:     #0a0d13;
-  --panel-2:   #0f131c;
-  --line:      #19202c;
-  --line-2:    #232c3b;
-  --text:      #eaf0fb;
-  --muted:     #6f7c93;
-  --faint:     #3a4456;
-  --accent:    #3df5e4;   /* signal mint-cyan */
-  --accent2:   #8aa0ff;   /* nemotron / explain */
-  --gold:      #ffce5c;
-  --judge:     #ffb020;
-  --retry:     #ff7a45;
-  --attn:      #ff4d9d;
-  --success:   #5cff9e;
-  --danger:    #ff4d62;
+  --bg:        #faf9f5;   /* Claude cream */
+  --bg-2:      #f2f0e9;
+  --panel:     #ffffff;
+  --panel-2:   #f2f0e9;
+  --line:      #e5e2d8;
+  --line-2:    #dedbd0;
+  --text:      #1f1e1c;
+  --muted:     #6f6b62;
+  --faint:     #a39b8d;
+  --accent:    #d97757;   /* Claude coral */
+  --accent2:   #b0784a;   /* kraft clay — nemotron / explain */
+  --gold:      #b5821f;
+  --judge:     #c08a2e;
+  --retry:     #c2613a;
+  --attn:      #c25d76;
+  --success:   #5b8a52;
+  --danger:    #c0473d;
   --font-display: "Chakra Petch", system-ui, sans-serif;
   --font-mono:    "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
@@ -35,8 +35,8 @@ body {
   -webkit-font-smoothing: antialiased;
   /* hairline measurement grid + corner glow atmosphere */
   background-image:
-    radial-gradient(120% 90% at 85% -10%, rgba(61,245,228,0.06), transparent 55%),
-    radial-gradient(90% 70% at -10% 110%, rgba(138,160,255,0.05), transparent 55%),
+    radial-gradient(120% 90% at 85% -10%, rgba(217,119,87,0.07), transparent 55%),
+    radial-gradient(90% 70% at -10% 110%, rgba(204,155,122,0.05), transparent 55%),
     linear-gradient(var(--line) 1px, transparent 1px),
     linear-gradient(90deg, var(--line) 1px, transparent 1px);
   background-size: auto, auto, 48px 48px, 48px 48px;
@@ -64,7 +64,7 @@ body::after {
 }
 .brand { display: flex; align-items: baseline; gap: 8px; padding: 0 6px; }
 .brand .mark { font-size: 26px; font-weight: 700; letter-spacing: 3px; color: var(--accent);
-               text-shadow: 0 0 24px rgba(61,245,228,0.4); }
+               text-shadow: 0 0 24px rgba(217,119,87,0.4); }
 .brand .ver { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
 .rail-sub { font-family: var(--font-mono); font-size: 10px; letter-spacing: 1.5px; color: var(--faint);
             text-transform: uppercase; padding: 0 6px; }
@@ -171,7 +171,7 @@ body::after {
 .chip.pulse .d { animation: pulse 1.2s ease-in-out infinite; }
 
 /* progress bar */
-.pbar { height: 8px; background: #11151e; border-radius: 5px; overflow: hidden; }
+.pbar { height: 8px; background: #e7e3d8; border-radius: 5px; overflow: hidden; }
 .pbar > i { display: block; height: 100%; border-radius: 5px; background: var(--accent); }
 .pbar.lg { height: 12px; }
 
@@ -179,7 +179,7 @@ body::after {
 .hbars { display: flex; flex-direction: column; gap: 10px; }
 .hbar { display: grid; grid-template-columns: 140px 1fr 52px; align-items: center; gap: 12px; font-size: 13px; }
 .hbar .lab { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hbar .track { height: 9px; background: #11151e; border-radius: 5px; overflow: hidden; }
+.hbar .track { height: 9px; background: #e7e3d8; border-radius: 5px; overflow: hidden; }
 .hbar .track > i { display: block; height: 100%; border-radius: 5px; }
 .hbar .num { font-family: var(--font-mono); text-align: right; color: var(--text); }
 
@@ -210,9 +210,9 @@ body::after {
 .lenses { display: flex; flex-wrap: wrap; gap: 26px; }
 .lens-wrap { display: flex; flex-direction: column; gap: 10px; }
 .lens {
-  width: 320px; height: 320px; border-radius: 18px; background: #000; position: relative; overflow: hidden;
-  box-shadow: 0 0 0 1px var(--line), 0 0 0 7px #04050a, 0 18px 50px rgba(0,0,0,.7),
-              inset 0 0 50px rgba(61,245,228,.03);
+  width: 320px; height: 320px; border-radius: 18px; background: var(--bg); position: relative; overflow: hidden;
+  box-shadow: 0 0 0 1px var(--line), 0 0 0 7px #ece9df, 0 18px 50px rgba(60,50,40,.16),
+              inset 0 0 50px rgba(217,119,87,.03);
   display: flex; padding: 16px;
 }
 .lens::before, .lens::after { content: ""; position: absolute; width: 13px; height: 13px;

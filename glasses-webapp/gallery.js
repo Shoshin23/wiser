@@ -338,50 +338,65 @@
   }
 
   /* ---------------- Cost × Quality (the evidence) ---------------- */
+  // Real evidence — computed from W.FLEET (token usage × PRICING), see docs/sdk-metrics-alignment.md
+  function costData() {
+    var F = (W && W.FLEET) || { sessions: [], mission: {} }, S = F.sessions;
+    var spend = F.mission.spendUsd || 0;
+    var allOpus = S.reduce(function (a, s) { return a + W.agentCost("opus", s.goal.metrics.usage); }, 0);
+    var avgPass = S.length ? Math.round(S.reduce(function (a, s) { return a + s.goal.pct; }, 0) / S.length) : 0;
+    var greenN = S.filter(function (s) { return s.goal.pct === 100; }).length;
+    return { S: S, spend: spend, allOpus: allOpus, ratio: spend ? allOpus / spend : 0,
+             avgPass: avgPass, greenN: greenN, tok: F.mission.totalTokens || 0 };
+  }
   function buildCost() {
-    var v = node('<div class="grid" style="gap:18px"></div>');
+    var d = costData(), v = node('<div class="grid" style="gap:18px"></div>');
     var kpis = '<div class="grid g4">' +
-      panel("Speedup", "", kpi("5.3×","412 ns → 78 ns","criterion · CI 3%","up")) +
-      panel("Quality", "", kpi("7/8","pass@8","1/8 cold → 7/8 fleet","up")) +
-      panel("Spend", "", kpi("$0.04","cheap fleet","vs ~$0.64 one Opus","goldc")) +
-      panel("Saving", "", kpi("~1/16","the cost","same result","accentc")) +
+      panel("Saving", "", kpi("~" + d.ratio.toFixed(0) + "×", "the cost", "same work, cheap models", "accentc")) +
+      panel("Spend", "", kpi("$" + d.spend.toFixed(2), "fleet total", "vs $" + d.allOpus.toFixed(2) + " all-Opus", "goldc")) +
+      panel("Quality", "", kpi(d.avgPass + "%", "avg pass-rate", d.greenN + "/" + d.S.length + " goals green", "up")) +
+      panel("Tokens", "", kpi(W.fmtTokens(d.tok), "in+out+cache", "model_usage (real)", null)) +
     '</div>';
-    var chart = panel("Cost × Quality — Pareto frontier", "cheap fleet vs Opus", paretoSVG() +
+    var chart = panel("Cost × Quality — Pareto frontier", "real runs · tokens × pricing", paretoSVG(d) +
       '<div class="legend-row">' +
-        '<span class="k"><span class="s" style="background:var(--accent)"></span>Nemotron fleet (best-of-N)</span>' +
-        '<span class="k"><span class="s" style="background:var(--gold)"></span>single Opus</span>' +
-        '<span class="k"><span class="s" style="background:var(--accent2)"></span>Pareto frontier</span>' +
+        '<span class="k"><span class="s" style="background:var(--accent)"></span>fleet sessions (real $)</span>' +
+        '<span class="k"><span class="s" style="background:var(--gold)"></span>same work, all-Opus</span>' +
       '</div>', "span2");
-    var iters = panel("Iterations-to-green", "distribution",
-      '<div class="hbars">' + hbar("1 iter", 20, "n=2") + hbar("2 iters", 50, "n=5") + hbar("3 iters", 30, "n=3") + '</div>');
-    var v2 = '<div class="grid g2" style="align-items:start">' + chart + '<div class="grid" style="gap:18px;align-content:start">' + iters +
-      panel("Latency", "p50 / p95", '<div class="grid g2">' + kpi("0.9s","p50","",null,"mono") + kpi("2.4s","p95","",null,"mono") + '</div>') + '</div></div>';
+    // iterations-to-green / progress, per session (real)
+    var bars = d.S.map(function (s) {
+      var i2g = s.goal.metrics.itersToGreen;
+      return hbar(s.task, s.goal.pct, i2g ? "green @ iter " + i2g : s.goal.pct + "%");
+    }).join("");
+    var iters = panel("Per session", "pass-rate · iterations-to-green", '<div class="hbars">' + bars + '</div>');
+    var evals = panel("Evaluation", "Outcomes rubric",
+      '<div class="note">' + d.greenN + ' / ' + d.S.length + ' goals green. Outcome score via ' +
+      '<span class="mono">span.outcome_evaluation_end.result</span> — SDK-supported (<span class="mono">define_outcome</span>) but not yet wired in the orchestrator.</div>');
+    var v2 = '<div class="grid g2" style="align-items:start">' + chart +
+      '<div class="grid" style="gap:18px;align-content:start">' + iters + evals + '</div></div>';
     v.innerHTML = kpis + v2;
     return v;
   }
-  function paretoSVG() {
-    // x = cost (log-ish, left cheap), y = quality (pass-rate). Fleet sits on/above frontier at low cost.
-    var w=560,h=300,pad=42;
-    function X(c){ return pad + c*(w-pad-20); }    // c in 0..1
+  function paretoSVG(d) {
+    // x = cost on a log scale (cheap left), y = quality (pass-rate). One point per real
+    // session; the gold square = the same token work priced at Opus (cheap-fleet story).
+    var w=560,h=300,pad=46;
+    var lo=Math.log10(0.004), hi=Math.log10(Math.max(d.allOpus, 8));
+    function X(c){ var lc=Math.log10(Math.max(c,0.004)); return pad + (lc-lo)/(hi-lo)*(w-pad-20); }
     function Y(q){ return h-pad - q*(h-pad-20); }   // q in 0..1
-    var fleet = [[0.05,0.62],[0.07,0.78],[0.09,0.88],[0.12,0.92]];
-    var opus  = [[0.85,0.9]];
-    var frontier = [[0.04,0.55],[0.09,0.88],[0.2,0.93],[0.6,0.95],[0.95,0.96]];
     var s = '<svg class="chart" viewBox="0 0 ' + w + ' ' + h + '">';
-    // axes
     s += '<line x1="'+pad+'" y1="'+(h-pad)+'" x2="'+(w-10)+'" y2="'+(h-pad)+'" stroke="var(--line-2)"/>';
     s += '<line x1="'+pad+'" y1="'+(h-pad)+'" x2="'+pad+'" y2="10" stroke="var(--line-2)"/>';
-    s += '<text x="'+(w/2)+'" y="'+(h-8)+'" text-anchor="middle">cost  →</text>';
+    s += '<text x="'+(w/2)+'" y="'+(h-8)+'" text-anchor="middle">cost (log $)  →</text>';
     s += '<text x="14" y="'+(h/2)+'" text-anchor="middle" transform="rotate(-90 14 '+(h/2)+')">quality (pass-rate) →</text>';
-    // frontier line
-    var fp = frontier.map(function(p,i){ return (i?"L":"M") + X(p[0]) + " " + Y(p[1]); }).join(" ");
-    s += '<path d="'+fp+'" fill="none" stroke="var(--accent2)" stroke-dasharray="5 4" stroke-width="1.5" opacity="0.8"/>';
-    // points
-    fleet.forEach(function(p){ s += '<circle cx="'+X(p[0])+'" cy="'+Y(p[1])+'" r="6" fill="var(--accent)"/>'; });
-    opus.forEach(function(p){ s += '<rect x="'+(X(p[0])-6)+'" y="'+(Y(p[1])-6)+'" width="12" height="12" fill="var(--gold)"/>'; });
-    // callout
-    s += '<text x="'+(X(0.12)+12)+'" y="'+(Y(0.92)+4)+'" fill="var(--accent)">fleet · 7/8 · $0.04</text>';
-    s += '<text x="'+(X(0.85)-10)+'" y="'+(Y(0.9)-12)+'" text-anchor="end" fill="var(--gold)">opus · 7/8 · $0.64</text>';
+    // fleet points (real cost, real pass)
+    d.S.forEach(function (sn) {
+      var m = sn.goal.metrics, cx = X(m.costUsd), cy = Y(sn.goal.pct/100);
+      s += '<circle cx="'+cx+'" cy="'+cy+'" r="6" fill="var(--accent)"/>';
+      s += '<text x="'+(cx+10)+'" y="'+(cy+4)+'" fill="var(--muted)" style="font-size:11px">'+sn.model+' · $'+m.costUsd.toFixed(2)+'</text>';
+    });
+    // all-Opus hypothetical at the fleet's avg quality
+    var ox=X(d.allOpus), oy=Y(d.avgPass/100);
+    s += '<rect x="'+(ox-6)+'" y="'+(oy-6)+'" width="12" height="12" fill="var(--gold)"/>';
+    s += '<text x="'+(ox-10)+'" y="'+(oy-12)+'" text-anchor="end" fill="var(--gold)">all-Opus · $'+d.allOpus.toFixed(2)+'</text>';
     s += '</svg>';
     return s;
   }
