@@ -15,6 +15,13 @@ const TTS_MODEL = process.env.TTS_MODEL || "canopylabs/orpheus-v1-english";
 const TTS_VOICE = process.env.TTS_VOICE || "Hannah";
 const TTS_MAX_CHARS = 200; // Groq Orpheus TTS hard limit per request
 
+// Claude Managed Agents (hosted): the answer step runs on Anthropic's hosted
+// agent loop. The agent + cloud environment are created ONCE out-of-band
+// (setup-managed-agent.js) — model/system/tools live on the AGENT, not here.
+const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
+const AGENT_ID = process.env.AGENT_ID;
+const ENV_ID = process.env.ENV_ID;
+
 // Clients are created lazily: at deploy time the CLI loads this module to analyze
 // it WITHOUT functions/.env in process.env, so constructing SDK clients at module
 // top-level would throw on the missing key. At runtime the env vars are present.
@@ -117,35 +124,58 @@ function hardWrap(s, maxChars) {
 }
 
 // ============================================================================
-// Answer step: plain Anthropic Messages API (replaces the Agent SDK CLI subprocess)
+// Answer step: Claude Managed Agents (hosted) — replaces the Messages API call
 // ============================================================================
 
 /**
- * Run a single answer turn via the plain Messages API. Pass an optional base64
- * image (no data: prefix) for the multimodal flow. Returns the final assistant text.
+ * Run a single answer turn on Anthropic's HOSTED agent loop:
+ *   sessions.create(agent, environment_id) -> events.stream (OPEN BEFORE SEND)
+ *   -> events.send(user.message) -> collect agent.message text
+ *   -> break only on TERMINAL idle (non-requires_action stop_reason) / terminated.
+ * The agent (model/system) + cloud environment are provisioned once and reused
+ * via AGENT_ID / ENV_ID. Returns the final assistant text.
+ *
+ * imageB64 is accepted for API compatibility but unused (text-only for now).
  */
-async function askAnthropic(text, imageB64, mediaType = "image/jpeg") {
-  const content = [{ type: "text", text }];
-  if (imageB64) {
-    content.push({
-      type: "image",
-      source: { type: "base64", media_type: mediaType, data: imageB64 },
-    });
+async function askAnthropic(text, _imageB64, _mediaType = "image/jpeg") {
+  if (!AGENT_ID || !ENV_ID) {
+    throw new Error("AGENT_ID/ENV_ID not configured (run setup-managed-agent.js)");
   }
 
-  const message = await anthropicClient().messages.create({
-    model: ANSWER_MODEL,
-    max_tokens: 1024,
-    system: SYSTEM,
-    messages: [{ role: "user", content }],
+  const client = anthropicClient();
+  const opts = { betas: [MANAGED_AGENTS_BETA] };
+
+  // One disposable session per run; the durable agent/env are reused.
+  const session = await client.beta.sessions.create(
+    { agent: AGENT_ID, environment_id: ENV_ID },
+    opts
+  );
+
+  // Stream BEFORE send — SSE has no replay. stream() returns an APIPromise that
+  // resolves to an async-iterable Stream.
+  const stream = await client.beta.sessions.events.stream(session.id, opts);
+
+  await client.beta.sessions.events.send(session.id, {
+    ...opts,
+    events: [{ type: "user.message", content: [{ type: "text", text }] }],
   });
 
-  // Extract final text from message.content (text blocks joined).
-  return message.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("")
-    .trim();
+  let answer = "";
+  for await (const event of stream) {
+    if (event.type === "agent.message") {
+      for (const b of event.content || []) {
+        if (b.type === "text") answer += b.text;
+      }
+    } else if (event.type === "session.status_idle") {
+      // idle != done: break only on a TERMINAL stop_reason (not requires_action).
+      const sr = event.stop_reason;
+      if (sr && sr.type !== "requires_action") break;
+    } else if (event.type === "session.status_terminated") {
+      break;
+    }
+  }
+
+  return answer.trim();
 }
 
 // ============================================================================
@@ -162,7 +192,7 @@ function distill(answer, transcript) {
 }
 
 // ============================================================================
-// Pipeline (ported from backend/src/pipeline.ts; agent -> Messages API)
+// Pipeline (ported from backend/src/pipeline.ts; answer -> Managed Agents)
 // ============================================================================
 
 /** Full voice pipeline: STT -> answer -> TTS -> card. */
@@ -281,6 +311,7 @@ app.post("/api/ask-text", express.json({ limit: "15mb" }), async (req, res) => {
 });
 
 exports.wiser = onRequest(
-  { cors: true, timeoutSeconds: 120, memory: "512MiB", region: "us-central1" },
+  // Managed agents are slower than messages.create — give the loop headroom.
+  { cors: true, timeoutSeconds: 300, memory: "512MiB", region: "us-central1" },
   app
 );
