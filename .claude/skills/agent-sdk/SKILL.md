@@ -7,10 +7,14 @@ user-invocable: true
 
 # Claude Agent SDK — `wiser`'s agent fleet
 
+> ⚠️ **wiser's chosen fleet path is hosted Claude Managed Agents — see the `managed-agents` skill.** That
+> deletes the self-hosted sandbox work below. Keep this skill as the **self-hosted alternative/contrast**
+> (and the source of the verifier-loop / structured-output / cost concepts the `measurement` skill reuses).
+
 The fleet = **many autonomous Claude coding agents**, each in its own sandbox, orchestrated from a backend.
-We build on the **Claude Agent SDK** ("Claude Code as a library"), **not** the low-level `anthropic` client
-and **not** Anthropic's hosted Managed Agents — *we* own the loop and the gVisor sandboxes (reusing our
-existing per-env sandbox proxy).
+This (self-hosted) path builds on the **Claude Agent SDK** ("Claude Code as a library"), **not** the
+low-level `anthropic` client — *we* own the loop and the gVisor sandboxes (reusing our existing per-env
+sandbox proxy).
 
 > For model IDs / pricing / first-party `anthropic` SDK, the `claude-api` skill is authoritative. This skill
 > is specifically the **Agent SDK** (`@anthropic-ai/claude-agent-sdk` / `claude-agent-sdk`), which the
