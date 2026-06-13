@@ -11,6 +11,8 @@
 		8F8F00782E8ACB4600A4BDAF /* WearablesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F8F00772E8ACB4500A4BDAF /* WearablesViewModel.swift */; };
 		8FD96B7F2E6F0A9800F56AB1 /* CameraAccessApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD96B792E6F0A9800F56AB1 /* CameraAccessApp.swift */; };
 		DA7E0000000000000000A001 /* Wiser.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7E0000000000000000A002 /* Wiser.swift */; };
+		DA7E0000000000000000B001 /* OrchestratorRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7E0000000000000000B002 /* OrchestratorRun.swift */; };
+		DA7E0000000000000000C001 /* GlassesDisplayHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7E0000000000000000C002 /* GlassesDisplayHub.swift */; };
 		8FD96B812E6F0A9800F56AB1 /* HomeScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD96B722E6F0A9800F56AB1 /* HomeScreenView.swift */; };
 		8FD96B872E6F0A9800F56AB1 /* StreamSessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD96B6F2E6F0A9800F56AB1 /* StreamSessionViewModel.swift */; };
 		8FD96B882E6F0A9800F56AB1 /* StreamSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD96B752E6F0A9800F56AB1 /* StreamSessionView.swift */; };
@@ -83,6 +85,8 @@
 		8FD96B782E6F0A9800F56AB1 /* CameraAccess.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CameraAccess.entitlements; sourceTree = "<group>"; };
 		8FD96B792E6F0A9800F56AB1 /* CameraAccessApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraAccessApp.swift; sourceTree = "<group>"; };
 		DA7E0000000000000000A002 /* Wiser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wiser.swift; sourceTree = "<group>"; };
+		DA7E0000000000000000B002 /* OrchestratorRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchestratorRun.swift; sourceTree = "<group>"; };
+		DA7E0000000000000000C002 /* GlassesDisplayHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassesDisplayHub.swift; sourceTree = "<group>"; };
 		8FD96B7B2E6F0A9800F56AB1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8FFD5FF22E8422580035E446 /* CircleButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircleButton.swift; sourceTree = "<group>"; };
 		8FFD5FF32E8422580035E446 /* CustomButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomButton.swift; sourceTree = "<group>"; };
@@ -201,6 +205,8 @@
 				8FD96B782E6F0A9800F56AB1 /* CameraAccess.entitlements */,
 				8FD96B792E6F0A9800F56AB1 /* CameraAccessApp.swift */,
 				DA7E0000000000000000A002 /* Wiser.swift */,
+				DA7E0000000000000000B002 /* OrchestratorRun.swift */,
+				DA7E0000000000000000C002 /* GlassesDisplayHub.swift */,
 				8FD96B7B2E6F0A9800F56AB1 /* Info.plist */,
 			);
 			path = CameraAccess;
@@ -392,6 +398,8 @@
 			files = (
 				8FD96B7F2E6F0A9800F56AB1 /* CameraAccessApp.swift in Sources */,
 				DA7E0000000000000000A001 /* Wiser.swift in Sources */,
+				DA7E0000000000000000B001 /* OrchestratorRun.swift in Sources */,
+				DA7E0000000000000000C001 /* GlassesDisplayHub.swift in Sources */,
 				8FD96B812E6F0A9800F56AB1 /* HomeScreenView.swift in Sources */,
 				8F2D23802E856711002D0588 /* DebugMenuViewModel.swift in Sources */,
 				FEEE00012F95000100000001 /* DeviceSessionManager.swift in Sources */,

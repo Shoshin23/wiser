@@ -23,7 +23,12 @@ struct MainAppView: View {
 
   var body: some View {
     if viewModel.registrationState == .registered {
+      // Build is the glasses entry: it's first so the app boots into it and its
+      // `.task { startGlasses() }` paints the Build start card on the lens at launch.
+      // Ask + Camera stay as switchable tabs.
       TabView {
+        BuildView(wearables: wearables)
+          .tabItem { Label("Build", systemImage: "hammer") }
         WiserView(wearables: wearables)
           .tabItem { Label("Ask", systemImage: "waveform") }
         StreamSessionView(wearables: wearables, wearablesVM: viewModel)

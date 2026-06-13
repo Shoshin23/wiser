@@ -40,6 +40,20 @@ struct WiserCard: Codable {
   let summary: String
 }
 
+/// Discriminator on the backend response. Absent/`nil` on older responses → treat as `.answer`.
+enum WiserKind: String, Codable {
+  case answer
+  case question
+  case handoff
+}
+
+/// One tappable action emitted by a `handoff_to_glasses` card. `value` is the text sent as a
+/// fresh sub-turn when the action is tapped.
+struct WiserAction: Codable, Hashable {
+  let label: String
+  let value: String
+}
+
 struct AskResponse: Codable {
   let transcript: String
   let answer: String
@@ -48,6 +62,28 @@ struct AskResponse: Codable {
   /// Conversation/session id. Present once the backend supports sessions.
   /// Send it back on the next ask to continue the same conversation; omit to start fresh.
   let sessionId: String?
+
+  // MARK: Additive — discriminated kinds (back-compat: all of the above are always present).
+
+  /// Discriminator. `nil`/absent on old responses → render a normal answer card.
+  let kind: WiserKind?
+
+  // kind == .question (ask_user). `audioChunks` = the spoken question.
+  let question: String?
+  let options: [String]?
+  /// The pending custom-tool id this question answers; echo it back on the next turn.
+  let toolUseId: String?
+  let sessionThreadId: String?
+
+  // kind == .handoff (handoff_to_glasses). `audioChunks` = the spoken summary.
+  let headline: String?
+  let summary: String?
+  let status: String? // "done" | "needs_input" | "blocked"
+  let detail: String?
+  let actions: [WiserAction]?
+
+  /// Defaults a missing/old `kind` to `.answer` so legacy responses still render an answer card.
+  var resolvedKind: WiserKind { kind ?? .answer }
 }
 
 // MARK: - Sessions contract (mirrors backend /api/sessions endpoints)
@@ -222,6 +258,7 @@ final class WiserViewModel {
     case listening = "Listening…"
     case thinking = "Thinking…"
     case speaking = "Speaking…"
+    case awaitingAnswer = "Your turn…"
   }
 
   var phase: Phase = .idle
@@ -249,13 +286,25 @@ final class WiserViewModel {
   }
 
   @ObservationIgnored private let wearables: WearablesInterface
-  @ObservationIgnored private let sessionManager: DeviceSessionManager
+  // The lens display is shared (one capability for the whole app — see GlassesDisplayHub).
+  // `display` is a thin pointer at the hub's capability so the existing `display.send(...)`
+  // call sites stay unchanged; it's populated in `startGlasses()` when the hub is ready.
   @ObservationIgnored private var display: Display?
-  @ObservationIgnored private var displayToken: AnyListenerToken?
   @ObservationIgnored private var recorder: AVAudioRecorder?
   @ObservationIgnored private var recordingURL: URL?
   @ObservationIgnored private let audio = AudioChunkPlayer()
   @ObservationIgnored private var lastChunks: [String] = []
+
+  // MARK: ask_user (human-in-the-loop) pending state
+  //
+  // When the agent calls `ask_user`, the backend returns `kind:"question"` WITHOUT replying,
+  // leaving the Anthropic session in `requires_action`. We hold the pending tool-use id (and the
+  // optional thread id) so the NEXT turn — voice answer or tapped choice — resumes the same
+  // pending question. Cleared inside `handleResult` on a handoff/answer; re-set if the agent asks
+  // a follow-up question. Cleared locally (and best-effort cancelled on the backend) if the user
+  // abandons the question by starting a fresh ask.
+  @ObservationIgnored private var pendingToolUseId: String?
+  @ObservationIgnored private var pendingThreadId: String?
 
   // MARK: Lens session-browse state
   //
@@ -267,29 +316,19 @@ final class WiserViewModel {
 
   init(wearables: WearablesInterface) {
     self.wearables = wearables
-    self.sessionManager = DeviceSessionManager(wearables: wearables)
   }
 
-  // MARK: Glasses display (best-effort)
+  // MARK: Glasses display (best-effort, shared via GlassesDisplayHub)
 
   func startGlasses() async {
-    guard display == nil else { return }
-    do {
-      let session = try await sessionManager.getSession()
-      let capability = try session.addDisplay()
-      displayToken = capability.statePublisher.listen { [weak self] state in
-        Task { @MainActor in
-          guard let self else { return }
-          if state == .started {
-            self.glassesReady = true
-            await self.sendReadyCard()
-          }
-        }
-      }
-      await capability.start()
-      display = capability
-    } catch {
-      DATLog.log.error("[wiser] startGlasses failed: \(String(describing: error), privacy: .public)")
+    // Bring up (or reuse) the one shared lens capability; when it's ready, grab the pointer so
+    // the existing `display.send(...)` call sites work, and paint the ready card. This also
+    // makes the Ask surface re-take the lens (repaint its ready card) whenever it reappears.
+    await GlassesDisplayHub.shared.start(wearables: wearables) { [weak self] in
+      guard let self else { return }
+      self.display = GlassesDisplayHub.shared.display
+      self.glassesReady = true
+      await self.sendReadyCard()
     }
   }
 
@@ -311,6 +350,8 @@ final class WiserViewModel {
     case .ask, .stop:
       toggleRecording()
     case .again:
+      // "Ask again" is a fresh ask — abandon any pending question first.
+      cancelPendingIfNeeded()
       Task { await startRecording() }
     case .none:
       break
@@ -428,6 +469,157 @@ final class WiserViewModel {
       let msg = (error as? DisplayError)?.description ?? error.localizedDescription
       DATLog.log.error("[wiser] sendAnswerCard failed: \(msg, privacy: .public)")
     }
+  }
+
+  // MARK: - ask_user (human-in-the-loop) cards
+
+  /// The `ask_user` question card. The agent paused to ask the user for a decision; we render
+  /// the question + up to 4 tappable choice buttons, ALWAYS plus a "Speak" button (voice answer).
+  ///
+  /// Focus / cursor (no focus API on 0.7.0 — see `sendCard`): the FIRST option Button is the
+  /// implicit cursor; if there are no options, "Speak" is first instead. Whole-card `.onTap`
+  /// mirrors the first option (or Speak) as the off-center fallback. ≤4 buttons total — when 4
+  /// options are offered, the 4-button cap means the choices fill the card and the user uses the
+  /// phone Ask affordance (or re-asks) to speak; we still cap options at 3 so Speak always fits.
+  private func sendQuestionCard(question: String, options: [String]) async {
+    guard let display else { return }
+    // Cap so "Speak" always fits within the ≤4-button budget.
+    let shown = Array(options.prefix(3))
+    let optionButtons: [MWDATDisplay.Button] = shown.map { option in
+      MWDATDisplay.Button(
+        label: String(option.prefix(40)),
+        style: .primary,
+        iconName: .checkmark,
+        onClick: { [weak self] in Task { @MainActor in await self?.answerWithChoice(option) } }
+      )
+    }
+    let speakButton = MWDATDisplay.Button(
+      label: "Speak",
+      style: shown.isEmpty ? .primary : .secondary,
+      iconName: .metaAi,
+      onClick: { [weak self] in Task { @MainActor in await self?.startAnswerRecording() } }
+    )
+    // First focusable child = the implicit cursor target: first option, else Speak.
+    let buttons = optionButtons + [speakButton]
+    do {
+      try await display.send(
+        FlexBox(direction: .column, spacing: 12) {
+          FlexBox(direction: .row, spacing: 8) {
+            for button in buttons {
+              button
+            }
+          }
+          MWDATDisplay.Text(String(question.prefix(180)), style: .heading)
+        }
+        .padding(24)
+        .background(.card)
+        // Off-center tap mirrors the first option (or Speak when there are no options).
+        .onTap { [weak self] in
+          Task { @MainActor in
+            if let first = shown.first {
+              await self?.answerWithChoice(first)
+            } else {
+              await self?.startAnswerRecording()
+            }
+          }
+        }
+      )
+    } catch {
+      let msg = (error as? DisplayError)?.description ?? error.localizedDescription
+      DATLog.log.error("[wiser] sendQuestionCard failed: \(msg, privacy: .public)")
+    }
+  }
+
+  /// The `handoff_to_glasses` card — the agent's final, structured output. Distinct from the
+  /// free-text answer card: `headline` as the heading, `summary` as the body, optional `detail`
+  /// as secondary body (truncated), and `status` as a small `.meta` tag. Each `action` becomes a
+  /// button that kicks off a fresh sub-turn (`askText(action.value)`); plus the standard
+  /// "Ask again" + "Sessions" buttons. First focusable child = first action (or "Ask again").
+  private func sendHandoffCard(headline: String, summary: String, status: String, detail: String?, actions: [WiserAction]) async {
+    guard let display else { return }
+    // Cap actions so the standard Ask again + Sessions buttons still fit within ≤4 visible
+    // primaries; we keep the two standard buttons and put actions ahead of them.
+    let shownActions = Array(actions.prefix(2))
+    let actionButtons: [MWDATDisplay.Button] = shownActions.map { action in
+      MWDATDisplay.Button(
+        label: String(action.label.prefix(40)),
+        style: .primary,
+        iconName: .triangleRight,
+        onClick: { [weak self] in Task { @MainActor in await self?.askText(action.value) } }
+      )
+    }
+    let againButton = MWDATDisplay.Button(
+      label: "Ask again",
+      style: shownActions.isEmpty ? .primary : .secondary,
+      iconName: .twoArrowsClockwise,
+      onClick: { [weak self] in Task { @MainActor in self?.runControl(.again) } }
+    )
+    let sessionsButton = MWDATDisplay.Button(
+      label: "Sessions",
+      style: .secondary,
+      iconName: .speechBubble,
+      onClick: { [weak self] in Task { @MainActor in await self?.openSessionsOnLens() } }
+    )
+    // First focusable child = first action button, else Ask again.
+    let buttons = actionButtons + [againButton, sessionsButton]
+    let detailText = detail.map { String($0.prefix(240)) }
+    do {
+      try await display.send(
+        FlexBox(direction: .column, spacing: 10) {
+          FlexBox(direction: .row, spacing: 8) {
+            for button in buttons {
+              button
+            }
+          }
+          MWDATDisplay.Text(status.uppercased(), style: .meta, color: .secondary)
+          MWDATDisplay.Text(String(headline.prefix(120)), style: .heading)
+          if !summary.isEmpty {
+            MWDATDisplay.Text(String(summary.prefix(180)), style: .body)
+          }
+          if let detailText, !detailText.isEmpty {
+            MWDATDisplay.Text(detailText, style: .body, color: .secondary)
+          }
+        }
+        .padding(20)
+        .background(.card)
+        // Off-center tap: run the first action if any, else Ask again.
+        .onTap { [weak self] in
+          Task { @MainActor in
+            if let first = shownActions.first {
+              await self?.askText(first.value)
+            } else {
+              self?.runControl(.again)
+            }
+          }
+        }
+      )
+    } catch {
+      let msg = (error as? DisplayError)?.description ?? error.localizedDescription
+      DATLog.log.error("[wiser] sendHandoffCard failed: \(msg, privacy: .public)")
+    }
+  }
+
+  /// Answer the pending `ask_user` question with a tapped choice. Resumes the same session via
+  /// the typed-ask path, carrying the pending tool-use id (+ thread id).
+  private func answerWithChoice(_ choice: String) async {
+    guard let toolUseId = pendingToolUseId else { return }
+    let threadId = pendingThreadId
+    transcript = choice
+    phase = .thinking
+    await sendCard(title: "Thinking…", body: "")
+    do {
+      let result = try await postAskText(choice, toolUseId: toolUseId, sessionThreadId: threadId)
+      await handleResult(result)
+    } catch {
+      showErr("Request failed: \(error.localizedDescription)")
+      phase = .idle
+    }
+  }
+
+  /// Voice answer to the pending `ask_user` question: just start recording. `stopAndSend()`
+  /// branches on `pendingToolUseId` to send the spoken answer down the resume path.
+  private func startAnswerRecording() async {
+    await startRecording()
   }
 
   // MARK: - Lens entry / ready card
@@ -673,6 +865,8 @@ final class WiserViewModel {
     if isRecording {
       Task { await stopAndSend() }
     } else {
+      // Starting a fresh ask abandons any pending `ask_user` question (never dead-end).
+      cancelPendingIfNeeded()
       Task { await startRecording() }
     }
   }
@@ -727,7 +921,13 @@ final class WiserViewModel {
       return
     }
     do {
-      let result = try await postAsk(audio: data, audioName: "recording.m4a", audioType: "audio/m4a", image: nil)
+      // If a question is pending, this recording is the spoken answer → resume that turn
+      // (the backend transcribes it, then sends it as the custom-tool result). Otherwise it's
+      // a fresh ask. Pending ids are cleared inside handleResult on handoff/answer.
+      let result = try await postAsk(
+        audio: data, audioName: "recording.m4a", audioType: "audio/m4a", image: nil,
+        toolUseId: pendingToolUseId, sessionThreadId: pendingThreadId
+      )
       await handleResult(result)
     } catch {
       showErr("Request failed: \(error.localizedDescription)")
@@ -744,13 +944,56 @@ final class WiserViewModel {
     if let sid = r.sessionId, !sid.isEmpty {
       currentSessionId = sid
     }
-    await sendAnswerCard(title: r.card.title, body: String(r.answer.prefix(240)))
 
-    if r.audioChunks.isEmpty {
+    switch r.resolvedKind {
+    case .question:
+      // Human-in-the-loop: store the pending tool id so the next turn resumes this question,
+      // render the question + options card, speak the question, then WAIT (do not go idle).
+      pendingToolUseId = r.toolUseId
+      pendingThreadId = r.sessionThreadId
+      let q = r.question ?? r.answer
+      await sendQuestionCard(question: q, options: r.options ?? [])
+      if r.audioChunks.isEmpty {
+        phase = .awaitingAnswer
+      } else {
+        phase = .speaking
+        audio.play(base64Chunks: r.audioChunks) { [weak self] in
+          Task { @MainActor in self?.phase = .awaitingAnswer }
+        }
+      }
+
+    case .handoff:
+      // The agent's final structured output. Clear any pending question, render the distinct
+      // handoff card, then speak-or-idle as usual.
+      pendingToolUseId = nil
+      pendingThreadId = nil
+      await sendHandoffCard(
+        headline: r.headline ?? r.card.title,
+        summary: r.summary ?? r.answer,
+        status: r.status ?? "done",
+        detail: r.detail,
+        actions: r.actions ?? []
+      )
+      speakOrIdle(r.audioChunks)
+
+    case .answer:
+      // Today's free-text fallback path.
+      pendingToolUseId = nil
+      pendingThreadId = nil
+      await sendAnswerCard(title: r.card.title, body: String(r.answer.prefix(240)))
+      speakOrIdle(r.audioChunks)
+    }
+  }
+
+  /// Speak the chunks then go idle when done; if there are none, go idle immediately.
+  /// Factored out of `handleResult` so every terminal (non-question) kind shares the same
+  /// "speak the elaboration, then return to Ready" behavior.
+  private func speakOrIdle(_ chunks: [String]) {
+    if chunks.isEmpty {
       phase = .idle
     } else {
       phase = .speaking
-      audio.play(base64Chunks: r.audioChunks) { [weak self] in
+      audio.play(base64Chunks: chunks) { [weak self] in
         Task { @MainActor in self?.phase = .idle }
       }
     }
@@ -766,7 +1009,7 @@ final class WiserViewModel {
 
   // MARK: Networking
 
-  private func postAsk(audio audioData: Data, audioName: String, audioType: String, image: Data?) async throws -> AskResponse {
+  private func postAsk(audio audioData: Data, audioName: String, audioType: String, image: Data?, toolUseId: String? = nil, sessionThreadId: String? = nil) async throws -> AskResponse {
     WiserConfig.backendURL = backendURL.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let url = URL(string: WiserConfig.backendURL + "/api/ask") else {
       throw WiserError.server("Invalid backend URL")
@@ -785,6 +1028,20 @@ final class WiserViewModel {
       append("--\(boundary)\r\n")
       append("Content-Disposition: form-data; name=\"sessionId\"\r\n\r\n")
       append(sid)
+      append("\r\n")
+    }
+    // Resume an `ask_user` question (when present): the backend transcribes the spoken answer
+    // and sends it as the custom-tool result for this pending tool-use id.
+    if let toolUseId, !toolUseId.isEmpty {
+      append("--\(boundary)\r\n")
+      append("Content-Disposition: form-data; name=\"toolUseId\"\r\n\r\n")
+      append(toolUseId)
+      append("\r\n")
+    }
+    if let sessionThreadId, !sessionThreadId.isEmpty {
+      append("--\(boundary)\r\n")
+      append("Content-Disposition: form-data; name=\"sessionThreadId\"\r\n\r\n")
+      append(sessionThreadId)
       append("\r\n")
     }
     append("--\(boundary)\r\n")
@@ -827,8 +1084,9 @@ final class WiserViewModel {
     }
   }
 
-  private func postAskText(_ text: String) async throws -> AskResponse {
-    let req = try makeJSONRequest(path: "/api/ask-text", body: AskTextBody(text: text, sessionId: currentSessionId))
+  private func postAskText(_ text: String, toolUseId: String? = nil, sessionThreadId: String? = nil) async throws -> AskResponse {
+    let body = AskTextBody(text: text, sessionId: currentSessionId, toolUseId: toolUseId, sessionThreadId: sessionThreadId)
+    let req = try makeJSONRequest(path: "/api/ask-text", body: body)
     let (data, resp) = try await URLSession.shared.data(for: req)
     guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
       throw WiserError.server(String(data: data, encoding: .utf8) ?? "request failed")
@@ -836,9 +1094,64 @@ final class WiserViewModel {
     return try JSONDecoder().decode(AskResponse.self, from: data)
   }
 
+  /// JSON body for `/api/ask-text`. `toolUseId`/`sessionThreadId` are present only on a resume
+  /// (answering a pending `ask_user`); `encodeIfPresent` omits them (and a nil sessionId) so old
+  /// fields are unchanged on a fresh ask.
   private struct AskTextBody: Encodable {
     let text: String
     let sessionId: String?
+    var toolUseId: String? = nil
+    var sessionThreadId: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+      case text, sessionId, toolUseId, sessionThreadId
+    }
+
+    func encode(to encoder: Encoder) throws {
+      var c = encoder.container(keyedBy: CodingKeys.self)
+      try c.encode(text, forKey: .text)
+      try c.encodeIfPresent(sessionId, forKey: .sessionId)
+      try c.encodeIfPresent(toolUseId, forKey: .toolUseId)
+      try c.encodeIfPresent(sessionThreadId, forKey: .sessionThreadId)
+    }
+  }
+
+  // MARK: Cancel a pending ask_user question
+
+  /// If a question is pending, abandon it: clear the local pending ids (so the UI never
+  /// dead-ends) and fire-and-forget `POST /api/cancel` to release the dangling tool on the
+  /// backend. Called when the user starts a fresh ask instead of answering.
+  private func cancelPendingIfNeeded() {
+    guard let toolUseId = pendingToolUseId else { return }
+    let sid = currentSessionId
+    pendingToolUseId = nil
+    pendingThreadId = nil
+    Task { await postCancel(sessionId: sid, toolUseId: toolUseId) }
+  }
+
+  /// Best-effort `POST /api/cancel {sessionId, toolUseId}` to error-out a dangling `ask_user`
+  /// tool when the user abandons the question. Failures are logged and ignored — the local
+  /// state is already cleared so the user is never stuck.
+  private func postCancel(sessionId: String?, toolUseId: String) async {
+    do {
+      let req = try makeJSONRequest(path: "/api/cancel", body: CancelBody(sessionId: sessionId, toolUseId: toolUseId))
+      _ = try? await URLSession.shared.data(for: req)
+    } catch {
+      DATLog.log.error("[wiser] postCancel failed: \(String(describing: error), privacy: .public)")
+    }
+  }
+
+  private struct CancelBody: Encodable {
+    let sessionId: String?
+    let toolUseId: String
+
+    enum CodingKeys: String, CodingKey { case sessionId, toolUseId }
+
+    func encode(to encoder: Encoder) throws {
+      var c = encoder.container(keyedBy: CodingKeys.self)
+      try c.encodeIfPresent(sessionId, forKey: .sessionId)
+      try c.encode(toolUseId, forKey: .toolUseId)
+    }
   }
 
   // MARK: Sessions
@@ -923,14 +1236,15 @@ final class WiserViewModel {
   // MARK: Lifecycle / helpers
 
   func stop() async {
+    // Only tear down THIS surface's local resources. The lens display capability is shared
+    // (GlassesDisplayHub) — leave it up so the Build tab keeps the glasses when the Ask tab
+    // disappears (e.g. on a tab switch). We just drop our local pointer; the next `startGlasses()`
+    // re-grabs it from the hub and repaints the ready card.
     recorder?.stop()
     recorder = nil
     audio.stop()
-    displayToken = nil
-    await display?.stop()
     display = nil
     glassesReady = false
-    sessionManager.cleanup()
   }
 
   func saveBackendURL() {
