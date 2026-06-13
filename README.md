@@ -1,6 +1,6 @@
 <div align="center">
 
-<video src="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-lens.mp4" poster="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-lens-poster.jpg" width="640" controls muted playsinline></video>
+<a href="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-lens.mp4"><img src="media/wiser-demo-lens.gif" width="640" alt="wiser — the real through-the-lens view: agent cards floating in your field of view"></a>
 
 # wiser
 
