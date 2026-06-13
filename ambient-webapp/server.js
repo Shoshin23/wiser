@@ -51,7 +51,7 @@ const SCAN_MODEL = process.env.SCAN_MODEL || "claude-haiku-4-5";
 // flip to "nemotron" to route the scan through Nebius without touching the route code.
 const SCAN_PROVIDER = process.env.SCAN_PROVIDER || "anthropic";
 const NEBIUS_BASE_URL = process.env.NEBIUS_BASE_URL || "https://api.tokenfactory.nebius.com/v1/";
-const NEMOTRON_SCAN_MODEL = process.env.NEMOTRON_SCAN_MODEL || "nvidia/nemotron-3-nano-30b-a3b";
+const NEMOTRON_SCAN_MODEL = process.env.NEMOTRON_SCAN_MODEL || "nvidia/Nemotron-3-Ultra-550b-a55b";
 const FIREBASE_BASE_URL =
   process.env.WISER_FIREBASE_URL ||
   "https://us-central1-wiser-1a319.cloudfunctions.net/wiser";
@@ -366,8 +366,8 @@ async function scanWithAnthropic(userContent, imageB64) {
   return normalizeOpportunity(text);
 }
 
-// ── Nemotron via Nebius — written but not the default; set SCAN_PROVIDER=nemotron to use it.
-// Text-only (no vision); a contributed image is ignored on this path. ──
+// ── Nemotron via Nebius — the text-scan provider when SCAN_PROVIDER=nemotron.
+// Text-only (no vision); image-bearing scans are routed to Haiku in scanForOpportunity. ──
 async function scanWithNemotron(userContent) {
   const res = await nebiusClient().chat.completions.create({
     model: NEMOTRON_SCAN_MODEL,
@@ -392,7 +392,10 @@ async function scanForOpportunity(transcript, proposed, contributions, imageB64)
     if (!imageB64) return null;
     userContent = "Recent conversation transcript:\n\n(none yet)";
   }
-  return SCAN_PROVIDER === "nemotron"
+  // Hybrid: Nemotron is text-only, so any contributed image falls back to Haiku's
+  // vision. Text-only scans go to the configured provider (Nemotron when enabled).
+  const useNemotron = SCAN_PROVIDER === "nemotron" && !imageB64;
+  return useNemotron
     ? scanWithNemotron(userContent)
     : scanWithAnthropic(userContent, imageB64);
 }
