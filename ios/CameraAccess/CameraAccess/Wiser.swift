@@ -45,6 +45,54 @@ struct AskResponse: Codable {
   let answer: String
   let audioChunks: [String] // base64 WAV, in play order
   let card: WiserCard
+  /// Conversation/session id. Present once the backend supports sessions.
+  /// Send it back on the next ask to continue the same conversation; omit to start fresh.
+  let sessionId: String?
+}
+
+// MARK: - Sessions contract (mirrors backend /api/sessions endpoints)
+
+/// One row in `GET /api/sessions`.
+struct SessionSummary: Codable, Identifiable, Hashable {
+  let id: String
+  let title: String?
+  let preview: String?
+  let status: String?
+  let createdAt: String?
+  let updatedAt: String?
+
+  /// Title to show in the list — title, else preview, else a short id, else "Untitled".
+  var displayTitle: String {
+    if let t = title, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return t }
+    if let p = preview, !p.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return p }
+    return "Conversation " + String(id.prefix(6))
+  }
+}
+
+struct SessionsList: Codable {
+  let sessions: [SessionSummary]
+}
+
+/// One message in a session detail.
+struct SessionMessage: Codable, Identifiable, Hashable {
+  /// Synthesized id (the backend rows have no id); index-based for stable SwiftUI identity.
+  var id: Int { hashValue }
+  let role: String   // "user" | "assistant"
+  let text: String
+
+  var isUser: Bool { role.lowercased() == "user" }
+}
+
+/// `GET /api/sessions/:id`.
+struct SessionDetail: Codable {
+  let id: String
+  let status: String?
+  let messages: [SessionMessage]
+}
+
+/// `POST /api/sessions` -> { sessionId }.
+struct CreateSessionResponse: Codable {
+  let sessionId: String
 }
 
 enum WiserError: LocalizedError {
@@ -184,8 +232,21 @@ final class WiserViewModel {
   var showError: Bool = false
   var errorMessage: String = ""
 
+  /// The conversation this app is currently threading.
+  /// nil => the next ask starts a fresh conversation; the backend assigns an id and we
+  /// capture it from the response so following asks continue the same conversation.
+  var currentSessionId: String?
+
   var isRecording: Bool { phase == .listening }
   var isBusy: Bool { phase == .thinking }
+
+  /// Short, glanceable label for the current conversation shown on the Ask screen.
+  var sessionLabel: String {
+    if let id = currentSessionId, !id.isEmpty {
+      return "session " + String(id.prefix(6))
+    }
+    return "new conversation"
+  }
 
   @ObservationIgnored private let wearables: WearablesInterface
   @ObservationIgnored private let sessionManager: DeviceSessionManager
@@ -395,6 +456,11 @@ final class WiserViewModel {
     transcript = r.transcript
     answer = r.answer
     lastChunks = r.audioChunks
+    // Capture/continue the conversation: the backend echoes the session it used (a new one
+    // if we sent none). Persist it so the next ask threads the same conversation memory.
+    if let sid = r.sessionId, !sid.isEmpty {
+      currentSessionId = sid
+    }
     await sendCard(title: r.card.title, body: String(r.answer.prefix(240)), control: .again)
 
     if r.audioChunks.isEmpty {
@@ -430,6 +496,14 @@ final class WiserViewModel {
 
     var body = Data()
     func append(_ s: String) { body.append(s.data(using: .utf8)!) }
+    // Thread the conversation: include the current session id (if any) as a form field so
+    // the backend continues that conversation; omitting it starts a fresh one.
+    if let sid = currentSessionId, !sid.isEmpty {
+      append("--\(boundary)\r\n")
+      append("Content-Disposition: form-data; name=\"sessionId\"\r\n\r\n")
+      append(sid)
+      append("\r\n")
+    }
     append("--\(boundary)\r\n")
     append("Content-Disposition: form-data; name=\"audio\"; filename=\"\(audioName)\"\r\n")
     append("Content-Type: \(audioType)\r\n\r\n")
@@ -450,6 +524,117 @@ final class WiserViewModel {
       throw WiserError.server(detail)
     }
     return try JSONDecoder().decode(AskResponse.self, from: data)
+  }
+
+  /// Send a typed prompt via `POST /api/ask-text {text, sessionId?}`.
+  /// Not wired into the UI yet (the loop is voice-first), but kept so the JSON path of the
+  /// contract is exercised the same way as the multipart one — handy for testing/text entry.
+  func askText(_ text: String) async {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    transcript = trimmed
+    phase = .thinking
+    await sendCard(title: "Thinking…", body: "")
+    do {
+      let result = try await postAskText(trimmed)
+      await handleResult(result)
+    } catch {
+      showErr("Request failed: \(error.localizedDescription)")
+      phase = .idle
+    }
+  }
+
+  private func postAskText(_ text: String) async throws -> AskResponse {
+    let req = try makeJSONRequest(path: "/api/ask-text", body: AskTextBody(text: text, sessionId: currentSessionId))
+    let (data, resp) = try await URLSession.shared.data(for: req)
+    guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+      throw WiserError.server(String(data: data, encoding: .utf8) ?? "request failed")
+    }
+    return try JSONDecoder().decode(AskResponse.self, from: data)
+  }
+
+  private struct AskTextBody: Encodable {
+    let text: String
+    let sessionId: String?
+  }
+
+  // MARK: Sessions
+
+  /// List conversations: `GET /api/sessions`.
+  func fetchSessions() async throws -> [SessionSummary] {
+    let req = try makeGETRequest(path: "/api/sessions")
+    let (data, resp) = try await URLSession.shared.data(for: req)
+    try Self.ensureOK(resp, data)
+    return try JSONDecoder().decode(SessionsList.self, from: data).sessions
+  }
+
+  /// Load one conversation's transcript: `GET /api/sessions/:id`.
+  func fetchSessionDetail(id: String) async throws -> SessionDetail {
+    let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+    let req = try makeGETRequest(path: "/api/sessions/\(encoded)")
+    let (data, resp) = try await URLSession.shared.data(for: req)
+    try Self.ensureOK(resp, data)
+    return try JSONDecoder().decode(SessionDetail.self, from: data)
+  }
+
+  /// Start a brand-new conversation: `POST /api/sessions` -> { sessionId }.
+  /// Sets `currentSessionId` and clears the on-screen transcript/answer for a fresh start.
+  func startNewSession() async throws {
+    let req = try makeJSONRequest(path: "/api/sessions", body: EmptyBody())
+    let (data, resp) = try await URLSession.shared.data(for: req)
+    try Self.ensureOK(resp, data)
+    let created = try JSONDecoder().decode(CreateSessionResponse.self, from: data)
+    resumeSession(id: created.sessionId, clearTranscript: true)
+  }
+
+  /// Point future asks at an existing conversation.
+  /// `clearTranscript` is true for a fresh "New session" (no history yet); false when
+  /// resuming an existing one (the detail screen already shows that conversation's history).
+  func resumeSession(id: String, clearTranscript: Bool) {
+    currentSessionId = id
+    if clearTranscript {
+      transcript = ""
+      answer = ""
+      lastChunks = []
+    }
+  }
+
+  private struct EmptyBody: Encodable {}
+
+  // MARK: Request builders
+
+  private func baseURL() throws -> URL {
+    WiserConfig.backendURL = backendURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let url = URL(string: WiserConfig.backendURL) else {
+      throw WiserError.server("Invalid backend URL")
+    }
+    return url
+  }
+
+  private func makeGETRequest(path: String) throws -> URLRequest {
+    let url = try baseURL().appendingPathComponent(path.hasPrefix("/") ? String(path.dropFirst()) : path)
+    var req = URLRequest(url: url)
+    req.httpMethod = "GET"
+    req.timeoutInterval = 30
+    req.setValue("application/json", forHTTPHeaderField: "Accept")
+    return req
+  }
+
+  private func makeJSONRequest<Body: Encodable>(path: String, body: Body) throws -> URLRequest {
+    let url = try baseURL().appendingPathComponent(path.hasPrefix("/") ? String(path.dropFirst()) : path)
+    var req = URLRequest(url: url)
+    req.httpMethod = "POST"
+    req.timeoutInterval = 60
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    req.setValue("application/json", forHTTPHeaderField: "Accept")
+    req.httpBody = try JSONEncoder().encode(body)
+    return req
+  }
+
+  private static func ensureOK(_ resp: URLResponse, _ data: Data) throws {
+    guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+      throw WiserError.server(String(data: data, encoding: .utf8) ?? "request failed")
+    }
   }
 
   // MARK: Lifecycle / helpers
@@ -491,12 +676,33 @@ final class WiserViewModel {
 
 struct WiserView: View {
   @State private var viewModel: WiserViewModel
+  @State private var showSessions = false
 
   init(wearables: WearablesInterface) {
     _viewModel = State(wrappedValue: WiserViewModel(wearables: wearables))
   }
 
   var body: some View {
+    NavigationStack {
+      askContent
+        .toolbar {
+          ToolbarItem(placement: .topBarTrailing) {
+            Button {
+              showSessions = true
+            } label: {
+              Label("Sessions", systemImage: "bubble.left.and.bubble.right")
+            }
+            .tint(.cyan)
+          }
+        }
+        .toolbarBackground(.black, for: .navigationBar)
+        .sheet(isPresented: $showSessions) {
+          SessionsView(viewModel: viewModel)
+        }
+    }
+  }
+
+  private var askContent: some View {
     ZStack {
       Color.black.ignoresSafeArea()
 
@@ -513,6 +719,21 @@ struct WiserView: View {
             .font(.caption)
             .foregroundStyle(.gray)
         }
+
+        // Current conversation, surfaced subtly. Tap to browse/switch sessions.
+        Button {
+          showSessions = true
+        } label: {
+          HStack(spacing: 6) {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+              .font(.system(size: 11))
+            Text(viewModel.sessionLabel)
+              .font(.system(size: 12, weight: .medium, design: .monospaced))
+          }
+          .foregroundStyle(.cyan.opacity(0.85))
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
 
         TextField("backend URL", text: $viewModel.backendURL)
           .textInputAutocapitalization(.never)
@@ -581,5 +802,297 @@ struct WiserView: View {
     } message: {
       Text(viewModel.errorMessage)
     }
+  }
+}
+
+// MARK: - Sessions browse screen
+
+/// Lists conversations from `GET /api/sessions`. Tap a row to open its transcript
+/// (with a Resume action); "New session" starts a fresh conversation.
+struct SessionsView: View {
+  let viewModel: WiserViewModel
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var sessions: [SessionSummary] = []
+  @State private var isLoading = false
+  @State private var loadError: String?
+
+  var body: some View {
+    NavigationStack {
+      ZStack {
+        Color.black.ignoresSafeArea()
+        content
+      }
+      .navigationTitle("Sessions")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(.black, for: .navigationBar)
+      .toolbarColorScheme(.dark, for: .navigationBar)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Done") { dismiss() }.tint(.cyan)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button {
+            Task { await newSession() }
+          } label: {
+            Label("New session", systemImage: "square.and.pencil")
+          }
+          .tint(.cyan)
+          .disabled(isLoading)
+        }
+      }
+      .task { await load() }
+      .refreshable { await load() }
+    }
+    .preferredColorScheme(.dark)
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if isLoading && sessions.isEmpty {
+      ProgressView().tint(.cyan)
+    } else if let loadError, sessions.isEmpty {
+      VStack(spacing: 12) {
+        Text("Couldn't load sessions")
+          .foregroundStyle(.white)
+        Text(loadError)
+          .font(.caption)
+          .foregroundStyle(.gray)
+          .multilineTextAlignment(.center)
+        Button("Retry") { Task { await load() } }
+          .tint(.cyan)
+      }
+      .padding(24)
+    } else if sessions.isEmpty {
+      VStack(spacing: 8) {
+        Image(systemName: "bubble.left.and.bubble.right")
+          .font(.system(size: 34))
+          .foregroundStyle(.gray)
+        Text("No conversations yet")
+          .foregroundStyle(.white)
+        Text("Tap New session, or just Ask.")
+          .font(.caption)
+          .foregroundStyle(.gray)
+      }
+    } else {
+      List {
+        ForEach(sessions) { session in
+          NavigationLink {
+            SessionDetailView(viewModel: viewModel, summary: session, onResume: { dismiss() })
+          } label: {
+            SessionRow(session: session, isCurrent: session.id == viewModel.currentSessionId)
+          }
+          .listRowBackground(Color.white.opacity(0.05))
+        }
+      }
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
+    }
+  }
+
+  private func load() async {
+    isLoading = true
+    loadError = nil
+    do {
+      sessions = try await viewModel.fetchSessions()
+    } catch {
+      loadError = error.localizedDescription
+    }
+    isLoading = false
+  }
+
+  private func newSession() async {
+    do {
+      try await viewModel.startNewSession()
+      dismiss()
+    } catch {
+      loadError = error.localizedDescription
+    }
+  }
+}
+
+private struct SessionRow: View {
+  let session: SessionSummary
+  let isCurrent: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack {
+        Text(session.displayTitle)
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(.white)
+          .lineLimit(1)
+        if isCurrent {
+          Text("current")
+            .font(.system(size: 10, weight: .bold))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.cyan.opacity(0.25))
+            .foregroundStyle(.cyan)
+            .clipShape(Capsule())
+        }
+      }
+      if let preview = session.preview, !preview.isEmpty, preview != session.title {
+        Text(preview)
+          .font(.system(size: 13))
+          .foregroundStyle(.white.opacity(0.7))
+          .lineLimit(2)
+      }
+      HStack(spacing: 8) {
+        if let rel = WiserRelativeTime.string(from: session.updatedAt ?? session.createdAt) {
+          Text(rel)
+        }
+        if let status = session.status, !status.isEmpty {
+          Text("• \(status)")
+        }
+      }
+      .font(.system(size: 11))
+      .foregroundStyle(.gray)
+    }
+    .padding(.vertical, 4)
+  }
+}
+
+// MARK: - Session detail screen
+
+/// Shows a conversation's messages from `GET /api/sessions/:id` with a Resume action that
+/// points future asks at this conversation and returns to the Ask screen.
+struct SessionDetailView: View {
+  let viewModel: WiserViewModel
+  let summary: SessionSummary
+  /// Called after Resume so the parent sheet can dismiss back to the Ask screen.
+  let onResume: () -> Void
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var detail: SessionDetail?
+  @State private var isLoading = false
+  @State private var loadError: String?
+
+  var body: some View {
+    ZStack {
+      Color.black.ignoresSafeArea()
+      content
+    }
+    .navigationTitle(summary.displayTitle)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(.black, for: .navigationBar)
+    .toolbarColorScheme(.dark, for: .navigationBar)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Resume") { resume() }
+          .tint(.cyan)
+          .fontWeight(.semibold)
+      }
+    }
+    .task { await load() }
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if isLoading {
+      ProgressView().tint(.cyan)
+    } else if let loadError {
+      VStack(spacing: 12) {
+        Text("Couldn't load conversation")
+          .foregroundStyle(.white)
+        Text(loadError)
+          .font(.caption).foregroundStyle(.gray).multilineTextAlignment(.center)
+        Button("Retry") { Task { await load() } }.tint(.cyan)
+      }
+      .padding(24)
+    } else if let detail {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          ForEach(Array(detail.messages.enumerated()), id: \.offset) { _, msg in
+            MessageBubble(message: msg)
+          }
+          if detail.messages.isEmpty {
+            Text("No messages yet.")
+              .font(.caption).foregroundStyle(.gray)
+              .frame(maxWidth: .infinity, alignment: .center)
+              .padding(.top, 40)
+          }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    } else {
+      Color.clear
+    }
+  }
+
+  private func load() async {
+    isLoading = true
+    loadError = nil
+    do {
+      detail = try await viewModel.fetchSessionDetail(id: summary.id)
+    } catch {
+      loadError = error.localizedDescription
+    }
+    isLoading = false
+  }
+
+  private func resume() {
+    // Point future asks at this conversation; keep the on-screen transcript as-is
+    // (the next ask continues from here). Dismiss back to the Ask screen.
+    viewModel.resumeSession(id: summary.id, clearTranscript: false)
+    dismiss()
+    onResume()
+  }
+}
+
+private struct MessageBubble: View {
+  let message: SessionMessage
+
+  var body: some View {
+    VStack(alignment: message.isUser ? .trailing : .leading, spacing: 3) {
+      Text(message.isUser ? "You" : "wiser")
+        .font(.caption2)
+        .foregroundStyle(message.isUser ? .gray : .cyan)
+      Text(message.text)
+        .font(.system(size: 14))
+        .foregroundStyle(.white)
+        .padding(10)
+        .background(message.isUser ? Color.white.opacity(0.08) : Color.cyan.opacity(0.14))
+        .cornerRadius(12)
+    }
+    .frame(maxWidth: .infinity, alignment: message.isUser ? .trailing : .leading)
+  }
+}
+
+// MARK: - Relative time
+
+/// Formats backend ISO-8601 (or epoch) timestamps into a short relative string
+/// ("2h ago"). Tolerant of the exact timestamp shape the backend sends.
+enum WiserRelativeTime {
+  private static let isoFractional: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+  }()
+  private static let iso: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime]
+    return f
+  }()
+  private static let relative: RelativeDateTimeFormatter = {
+    let f = RelativeDateTimeFormatter()
+    f.unitsStyle = .short
+    return f
+  }()
+
+  static func string(from raw: String?) -> String? {
+    guard let raw, !raw.isEmpty else { return nil }
+    guard let date = parse(raw) else { return nil }
+    return relative.localizedString(for: date, relativeTo: Date())
+  }
+
+  private static func parse(_ raw: String) -> Date? {
+    if let d = isoFractional.date(from: raw) { return d }
+    if let d = iso.date(from: raw) { return d }
+    // Epoch milliseconds or seconds.
+    if let n = Double(raw) {
+      return Date(timeIntervalSince1970: n > 1_000_000_000_000 ? n / 1000 : n)
+    }
+    return nil
   }
 }

@@ -219,7 +219,7 @@ async function askAnthropic(text, sessionId, _imageB64, _mediaType = "image/jpeg
 }
 
 // ============================================================================
-// Browse past sessions (read-only) — Managed Agents list + transcript
+// Session management — Managed Agents list / transcript / create
 // ============================================================================
 //
 // SCOPING CAVEAT: client.beta.sessions.list() is API-KEY/ORG scoped. It returns
@@ -227,8 +227,16 @@ async function askAnthropic(text, sessionId, _imageB64, _mediaType = "image/jpeg
 // end-users, not per-user. There is no end-user identity on a managed-agents
 // session. If per-user history is needed, filter by a metadata tag set at
 // session-create time, or keep an own index. For now this lists all key sessions.
+//
+// TIMESTAMP NOTE: list rows carry created_at/updated_at; per-event objects carry
+// processed_at (not created_at). The transcript relies on the API's order:"asc"
+// for chronology rather than per-event timestamps.
 
-/** Pull the first `user.message` text for a session as a cheap preview (one tiny page). */
+/**
+ * Cheap best-effort preview: the first `user.message` text for a session, fetched
+ * as one tiny page (limit 1, user.message only). Returns "" on any failure — a
+ * preview must NEVER fail the list. Only called when the session has no title.
+ */
 async function sessionPreview(sessionId) {
   try {
     const page = await anthropicClient().beta.sessions.events.list(
@@ -238,53 +246,64 @@ async function sessionPreview(sessionId) {
     for await (const ev of page) {
       if (ev.type === "user.message") {
         const txt = (ev.content || [])
-          .filter((b) => b.type === "text")
+          .filter((b) => b && b.type === "text")
           .map((b) => b.text)
           .join(" ")
           .trim();
-        return txt.slice(0, 200) || null;
+        return txt.slice(0, 200);
       }
     }
   } catch (err) {
     console.warn(`preview failed for ${sessionId}:`, errMsg(err));
   }
-  return null;
+  return "";
 }
 
 /**
- * List sessions (newest first), with a cheap per-session preview built from the
- * first user message. Cursor-paginated: pass `cursor` (opaque), get `nextCursor`.
- * `withPreview=false` skips the extra per-session events.list calls (faster).
+ * List sessions (newest first) shaped to the iOS contract:
+ *   { sessions: [{ id, title, preview, status, createdAt, updatedAt }] }
+ * `title` may be "" (Managed Agents leaves it null until/unless one is set).
+ * `preview` = title when non-empty, else a best-effort first-user-message snippet
+ * (one extra tiny events.list per untitled session); falls back to "" — never
+ * fails the list. sessions.list already returns newest-first.
  */
-async function listSessions({ limit = 20, cursor, withPreview = true } = {}) {
-  const params = { ...MA_OPTS, limit };
-  if (cursor) params.page = cursor;
-  const page = await anthropicClient().beta.sessions.list(params);
+async function listSessions({ limit = 50 } = {}) {
+  const page = await anthropicClient().beta.sessions.list({ ...MA_OPTS, limit });
+  const rows = page.data || [];
 
-  const rows = (page.data || []).map((s) => ({
+  // Build previews only for untitled sessions; titled ones use the title verbatim.
+  const previews = await Promise.all(
+    rows.map((s) => (s.title ? Promise.resolve(s.title) : sessionPreview(s.id)))
+  );
+
+  const sessions = rows.map((s, i) => ({
     id: s.id,
+    title: s.title || "",
+    preview: previews[i] || "",
+    status: s.status,
     createdAt: s.created_at,
     updatedAt: s.updated_at,
-    status: s.status,
-    title: s.title || null,
-    agentId: (s.agent && (s.agent.id || s.agent.agent_id)) || null,
   }));
 
-  if (withPreview) {
-    const previews = await Promise.all(rows.map((r) => sessionPreview(r.id)));
-    rows.forEach((r, i) => {
-      r.preview = previews[i];
-    });
-  }
-
-  return { sessions: rows, nextCursor: page.next_page || null };
+  return { sessions };
 }
 
-/** Full transcript for one session: ordered events flattened to {type, role, text, at}. */
+/**
+ * Full transcript for one session shaped to the iOS contract:
+ *   { id, status, messages: [{ role: "user"|"assistant", text }] }
+ * Events are server-ordered chronologically (order: "asc"). Only user.message /
+ * agent.message carry conversational text; agent.message -> "assistant". Text
+ * blocks within an event are concatenated. Status comes from sessions.retrieve.
+ */
 async function sessionTranscript(sessionId, { limit = 500 } = {}) {
-  const page = await anthropicClient().beta.sessions.events.list(
+  const client = anthropicClient();
+
+  // Status + existence check (404/410 here -> the route maps to a 404).
+  const session = await client.beta.sessions.retrieve(sessionId, MA_OPTS);
+
+  const page = await client.beta.sessions.events.list(
     sessionId,
-    { ...MA_OPTS, limit, order: "asc" }
+    { ...MA_OPTS, limit, order: "asc", types: ["user.message", "agent.message"] }
   );
 
   const messages = [];
@@ -295,13 +314,14 @@ async function sessionTranscript(sessionId, { limit = 500 } = {}) {
       .join("")
       .trim();
     if (ev.type === "user.message") {
-      messages.push({ role: "user", type: ev.type, text, at: ev.created_at });
+      messages.push({ role: "user", text });
     } else if (ev.type === "agent.message") {
-      messages.push({ role: "agent", type: ev.type, text, at: ev.created_at });
+      messages.push({ role: "assistant", text });
     }
     if (messages.length >= limit) break;
   }
-  return messages;
+
+  return { id: session.id, status: session.status, messages };
 }
 
 // ============================================================================
@@ -450,21 +470,12 @@ app.post("/api/ask-text", express.json({ limit: "15mb" }), async (req, res) => {
   }
 });
 
-// Browse past managed-agents sessions (read-only). KEY/ORG-SCOPED: returns every
-// session created with this API key (all wiser users), newest first.
-// Query: ?limit=20&cursor=<opaque>&preview=0  (preview=0 skips per-session lookups)
-// -> { sessions: [{ id, createdAt, updatedAt, status, title, agentId, preview }], nextCursor }
-app.get("/api/sessions", async (req, res) => {
+// List past managed-agents sessions (newest first). KEY/ORG-SCOPED: returns every
+// session created with this API key (all wiser users), not per-end-user.
+// -> { sessions: [{ id, title, preview, status, createdAt, updatedAt }] }
+app.get("/api/sessions", async (_req, res) => {
   try {
-    if (!AGENT_ID || !ENV_ID) {
-      // Not strictly required to list, but signals the function is configured.
-      // listing works without them; we still allow it.
-    }
-    const rawLimit = parseInt(req.query.limit, 10);
-    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 20;
-    const cursor = req.query.cursor || undefined;
-    const withPreview = req.query.preview !== "0" && req.query.preview !== "false";
-    const result = await listSessions({ limit, cursor, withPreview });
+    const result = await listSessions({ limit: 50 });
     res.json(result);
   } catch (err) {
     console.error("/api/sessions error:", err);
@@ -472,17 +483,39 @@ app.get("/api/sessions", async (req, res) => {
   }
 });
 
+// Create a NEW session against the durable agent/env. Returns its id so the
+// client can drive the conversation via /api/ask-text { text, sessionId }.
+// -> { sessionId }
+app.post("/api/sessions", async (_req, res) => {
+  try {
+    if (!AGENT_ID || !ENV_ID) {
+      return res
+        .status(500)
+        .json({ error: "AGENT_ID/ENV_ID not configured (run setup-managed-agent.js)" });
+    }
+    const sessionId = await createSession();
+    res.json({ sessionId });
+  } catch (err) {
+    console.error("POST /api/sessions error:", err);
+    res.status(500).json({ error: errMsg(err) });
+  }
+});
+
 // Full transcript for one session (deep dive).
-// -> { id, messages: [{ role, type, text, at }] }
+// -> { id, status, messages: [{ role: "user"|"assistant", text }] }
 app.get("/api/sessions/:id", async (req, res) => {
   try {
     const id = req.params.id;
     if (!id) return res.status(400).json({ error: "missing session id" });
-    const messages = await sessionTranscript(id);
-    res.json({ id, messages });
+    const result = await sessionTranscript(id);
+    res.json(result);
   } catch (err) {
     console.error("/api/sessions/:id error:", err);
-    const status = err && (err.status === 404 || err.status === 410) ? 404 : 500;
+    // A gone (404/410) or malformed/invalid (400 "Invalid session ID") id is a
+    // not-found from the client's perspective; anything else is a real 500.
+    const s = err && err.status;
+    const invalidId = s === 400 && /invalid session id/i.test(errMsg(err));
+    const status = s === 404 || s === 410 || invalidId ? 404 : 500;
     res.status(status).json({ error: errMsg(err) });
   }
 });
