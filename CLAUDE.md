@@ -18,6 +18,31 @@ problem. This tension is the design north star and the demo's punchline. It driv
 
 Judge any feature by: does it let agents be present without stealing attention?
 
+## The compression layer (core design problem)
+
+The hard technical idea of the hack: **agentic coding produces a firehose of information** (diffs, logs,
+reasoning, multiple parallel agents) and **the glasses can show almost none of it.** The display is a
+~600×600 surface, **one view at a time, no scrolling, a handful of words.** So the central problem is:
+
+> **How do you compress a large, evolving agent state into a tiny visual + voice + gesture surface —
+> losing the noise, keeping only what the human must see or decide?**
+
+Three output/input channels, each tiny — design to their limits, not around them:
+
+- **Visual (smallest):** a **card** = ~1 headline + 1–2 lines. The irreducible signal: a decision, an
+  approval, a blocker. Everything else is dropped or deferred to voice.
+- **Voice (the detail bandwidth):** the glasses *speak* the elaboration and the user talks back. This is
+  where "more detail" lives, since text can't. Note: no raw mic stream — audio is HFP 8 kHz mono.
+- **Gesture (steering):** the Neural Band gives exactly **6 inputs** (4 swipes + 2 pinches → arrows +
+  enter/cancel). That's the whole control vocabulary: approve/reject, drill in, next/prev, **ask for
+  clarification**. We "steer" the agents through these, not a keyboard.
+
+**MVP scope (don't overcomplicate):** one cheap **Nemotron distill pass** turns an agent's raw result into
+a fixed compact shape — `{ headline, one-liner, spoken_detail?, actions[] }` — rendered as a card with a
+couple of gesture actions. No adaptive/hierarchical/learned compression yet; a single deterministic
+summarize-to-card step is the MVP. The compression layer is also the **cost-quality story** (cheap model
+does the squeezing) and the **non-distracting story** (compression *is* attention management).
+
 ## What this is
 
 **wiser** is a hackathon project: a fleet of autonomous coding agents driven by voice and surfaced on Meta

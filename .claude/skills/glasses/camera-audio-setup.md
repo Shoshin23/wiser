@@ -3,6 +3,12 @@
 The capture/voice loop for `wiser` — "snap the whiteboard, ask the agent to build it" — needs the
 **native iOS DAT SDK**. Web Apps can't reach the camera or mic.
 
+> **v0.7.0 API rename (verified June 2026):** the camera types below were renamed for cross-platform parity:
+> `StreamSession → Stream`, `StreamSessionConfig → StreamConfiguration`, `StreamSessionState → StreamState`,
+> `StreamSessionError → StreamError`. Snippets here use the old names — translate to the new ones on ≥0.7.0.
+> Also note: **mic gives no raw PCM stream** — audio is system **HFP, 8 kHz mono** only (plan STT around that),
+> and v0.7.0 added thermal/battery session errors that can stop long sessions.
+
 ## Why iOS, not Web App
 
 Per the FAQ, Web Apps get display + Neural Band/captouch + motion/GPS/local-storage — **but not camera or
