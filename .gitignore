@@ -3,3 +3,5 @@
 *.local.md
 .env
 .dev.vars
+# Local-only progress log maintained by the /loop watcher
+hackathon-progress.md
