@@ -1,6 +1,6 @@
 <div align="center">
 
-https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-lens.mp4
+<video src="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-lens.mp4" poster="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-lens-poster.jpg" width="640" controls muted playsinline></video>
 
 # wiser
 
