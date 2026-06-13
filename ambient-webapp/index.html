@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="wiser — ambient opportunity cards: live transcription + a background agent-task scanner" />
+  <title>wiser · ambient</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="amb-stage">
+    <div class="amb-surface">
+
+      <div class="amb-head">
+        <span class="amb-mark">wiser</span>
+        <span class="amb-sub">ambient</span>
+        <span id="status" class="amb-status"><i class="dot"></i><span id="status-label">idle</span></span>
+      </div>
+
+      <!-- opportunity cards at the top (the signal) — these grow and push the transcript down -->
+      <div id="top" class="amb-top">
+        <div id="opp-deck" class="opp-deck"></div>
+        <div id="opp-hint" class="opp-hint hidden"><span><kbd>↑↓</kbd> browse</span><span><kbd>←</kbd> reject</span><span><kbd>⏎</kbd> edit</span><span><kbd>→</kbd> approve</span></div>
+        <!-- dispatched-agent results -->
+        <div id="results" class="results"></div>
+      </div>
+
+      <!-- running transcript — fixed pane pinned at the bottom, auto-scrolled to the latest (ambient context) -->
+      <div id="transcript" class="transcript">
+        <div class="transcript-empty">Press <b>Start listening</b> — the conversation transcript will appear here, and wiser will quietly watch for tasks worth handing to an agent.</div>
+      </div>
+
+      <div class="amb-controls">
+        <button id="toggle" class="amb-btn">Start listening</button>
+        <span id="note" class="amb-note"></span>
+      </div>
+    </div>
+
+    <!-- edit-the-prompt overlay -->
+    <div id="editor" class="editor hidden">
+      <div class="editor-box">
+        <div class="editor-title">Edit the task before sending</div>
+        <textarea id="editor-text" spellcheck="false"></textarea>
+        <div class="editor-actions">
+          <button id="editor-cancel" class="amb-btn secondary">Cancel</button>
+          <button id="editor-send" class="amb-btn">Send to agent</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- start gate (mic needs a user gesture + a secure context: localhost or https) -->
+    <div id="start" class="amb-start">
+      <div class="amb-mark" style="font-size:48px;">wiser</div>
+      <div class="amb-sub">ambient opportunity cards</div>
+      <button id="start-btn" class="amb-btn" style="margin-top:18px;">Start listening</button>
+      <div class="amb-note" id="start-note" style="margin-left:0;"></div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="contract.js"></script>
+  <script src="cards.js"></script>
+  <script src="ambient-cards.js"></script>
+  <script src="ambient.js"></script>
+</body>
+</html>
