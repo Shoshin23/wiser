@@ -47,6 +47,11 @@ loadEnvFile(path.join(__dirname, "..", "firebase", "functions", ".env"));
 const PORT = process.env.PORT || 8788;
 const STT_MODEL = process.env.STT_MODEL || "whisper-large-v3-turbo";
 const SCAN_MODEL = process.env.SCAN_MODEL || "claude-haiku-4-5";
+// Which provider runs the cheap scan step. "anthropic" (Haiku) is the live default;
+// flip to "nemotron" to route the scan through Nebius without touching the route code.
+const SCAN_PROVIDER = process.env.SCAN_PROVIDER || "anthropic";
+const NEBIUS_BASE_URL = process.env.NEBIUS_BASE_URL || "https://api.tokenfactory.nebius.com/v1/";
+const NEMOTRON_SCAN_MODEL = process.env.NEMOTRON_SCAN_MODEL || "nvidia/nemotron-3-nano-30b-a3b";
 const FIREBASE_BASE_URL =
   process.env.WISER_FIREBASE_URL ||
   "https://us-central1-wiser-1a319.cloudfunctions.net/wiser";
@@ -58,7 +63,8 @@ const SCAN_MAX_CHARS = 1500; // rolling transcript window fed to Haiku
 const Groq = require("groq-sdk").default || require("groq-sdk");
 const { toFile } = require("groq-sdk");
 const Anthropic = require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
-let _groq, _anthropic;
+const OpenAI = require("openai").default || require("openai");
+let _groq, _anthropic, _nebius;
 function groqClient() {
   if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY not configured");
   if (!_groq) _groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -68,6 +74,24 @@ function anthropicClient() {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not configured");
   if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   return _anthropic;
+}
+// Nemotron via Nebius Token Factory (OpenAI-SDK compatible).
+function nebiusClient() {
+  if (!process.env.NEBIUS_API_KEY) throw new Error("NEBIUS_API_KEY not configured");
+  if (!_nebius) _nebius = new OpenAI({ baseURL: NEBIUS_BASE_URL, apiKey: process.env.NEBIUS_API_KEY });
+  return _nebius;
+}
+
+// ───────────────────────── live brainstorm registry (in-memory) ─────────────────────────
+// A brainstorm is a server-side session the glasses (a separate phone client over an
+// ngrok tunnel) can contribute voice+photo into; the browser folds new contributions
+// into its next /api/scan. Lost on restart — fine for a hackathon demo.
+//   session: { id, title, status:"active"|"ended",
+//              contributions:[{id,text,imageB64,mode:"inject",at}], createdAt, updatedAt }
+const brainstorms = new Map(); // id -> session
+function activeBrainstorm() {
+  return [...brainstorms.values()].filter(b => b.status === "active")
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0] || null;
 }
 
 // ───────────────────────── STT (Groq Whisper, same pattern as backend/src/groq.ts) ─────────────────────────
@@ -134,34 +158,86 @@ const SCAN_SCHEMA = {
   additionalProperties: false,
 };
 
-async function scanForOpportunity(transcript, proposed) {
+// Build the per-request user turn (kept separate so the cached system prefix is stable).
+function buildScanUserContent(transcript, proposed, contributions) {
   const window = String(transcript || "").slice(-SCAN_MAX_CHARS).trim();
-  if (!window) return null;
-  let userContent = "Recent conversation transcript:\n\n" + window;
-  // Already-proposed tasks (dynamic, per-request) — kept in the user turn so the
-  // cached system prefix stays stable. Bounded so the prompt can't grow unbounded.
+  const contribs = (Array.isArray(contributions) ? contributions : []).filter(Boolean);
+  if (!window && !contribs.length) return null;
+  let userContent = "Recent conversation transcript:\n\n" + (window || "(none yet)");
+  // Already-proposed tasks (dynamic, per-request). Bounded so the prompt can't grow unbounded.
   const prior = (Array.isArray(proposed) ? proposed : []).filter(Boolean).slice(-25);
   if (prior.length) {
     userContent +=
       "\n\nTasks ALREADY PROPOSED this session — do NOT propose these again or anything substantially overlapping:\n" +
       prior.map((p, i) => (i + 1) + ". " + (p.title ? p.title + " — " : "") + (p.proposedPrompt || "")).join("\n");
   }
-  const res = await anthropicClient().messages.create({
-    model: SCAN_MODEL,
-    max_tokens: 400,
-    system: SCAN_SYSTEM,
-    output_config: { format: { type: "json_schema", schema: SCAN_SCHEMA } },
-    messages: [{ role: "user", content: userContent }],
-  });
-  const text = (res.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+  // Direct contributions from the team (voice + optional photo) — high signal.
+  if (contribs.length) {
+    userContent +=
+      "\n\nDIRECT CONTRIBUTIONS the team JUST made (high-signal — strongly prefer surfacing an opportunity from these, and if an image is attached, ground the opportunity in what it shows):\n" +
+      contribs.map((c, i) => (i + 1) + ". " + c).join("\n");
+  }
+  return userContent;
+}
+
+// Parse a model's JSON text into a clean opportunity (or null).
+function normalizeOpportunity(text) {
   let parsed;
   try { parsed = JSON.parse(text); } catch (e) {
-    console.warn("scan: could not parse model JSON:", text.slice(0, 200));
+    console.warn("scan: could not parse model JSON:", String(text).slice(0, 200));
     return null;
   }
   const opp = parsed && parsed.opportunity;
   if (!opp || !opp.title || !opp.proposedPrompt) return null;
   return { title: opp.title, summary: opp.summary || "", proposedPrompt: opp.proposedPrompt };
+}
+
+// ── Anthropic (Claude Haiku) — the live default. Accepts an optional POV image
+// (a glasses contribution) as a vision block; Haiku is vision-capable. ──
+async function scanWithAnthropic(userContent, imageB64) {
+  const res = await anthropicClient().messages.create({
+    model: SCAN_MODEL,
+    max_tokens: 400,
+    system: SCAN_SYSTEM,
+    output_config: { format: { type: "json_schema", schema: SCAN_SCHEMA } },
+    messages: [{ role: "user", content: imageB64
+      ? [{ type: "text", text: userContent },
+         { type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageB64 } }]
+      : userContent }],
+  });
+  const text = (res.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+  return normalizeOpportunity(text);
+}
+
+// ── Nemotron via Nebius — written but not the default; set SCAN_PROVIDER=nemotron to use it.
+// Text-only (no vision); a contributed image is ignored on this path. ──
+async function scanWithNemotron(userContent) {
+  const res = await nebiusClient().chat.completions.create({
+    model: NEMOTRON_SCAN_MODEL,
+    max_tokens: 400,
+    temperature: 0.2,
+    // Schema in the param AND the prompt — small MoE models occasionally emit a stray prefix.
+    response_format: { type: "json_schema", json_schema: { name: "scan", schema: SCAN_SCHEMA } },
+    messages: [
+      { role: "system", content: SCAN_SYSTEM + "\n\nRespond ONLY as JSON matching: { \"opportunity\": { title, summary, proposedPrompt } | null }." },
+      { role: "user", content: userContent },
+    ],
+  });
+  const text = (res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content) || "";
+  return normalizeOpportunity(text);
+}
+
+// A scan can be driven purely by a fresh contribution (voice/photo) even if the
+// browser transcript hasn't grown — so allow an image-only scan too.
+async function scanForOpportunity(transcript, proposed, contributions, imageB64) {
+  let userContent = buildScanUserContent(transcript, proposed, contributions);
+  if (!userContent) {
+    if (!imageB64) return null;
+    userContent = "Recent conversation transcript:\n\n(none yet)";
+  }
+  return SCAN_PROVIDER === "nemotron"
+    ? scanWithNemotron(userContent)
+    : scanWithAnthropic(userContent, imageB64);
 }
 
 // ───────────────────────── HTTP ─────────────────────────
@@ -234,8 +310,63 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && p === "/api/scan") {
       const body = await readJson(req);
-      const opportunity = await scanForOpportunity(body.transcript, body.proposed);
+      const { transcript, proposed, contributions, imageB64 } = body;
+      const opportunity = await scanForOpportunity(transcript, proposed, contributions, imageB64);
       return json(res, 200, { opportunity });
+    }
+
+    // ── live brainstorm sessions (stateful; glasses contribute into the active one) ──
+    if (req.method === "POST" && p === "/api/brainstorms") {
+      const body = await readJson(req);
+      const now = Date.now();
+      const id = "bs_" + now.toString(36) + Math.random().toString(36).slice(2, 6);
+      brainstorms.set(id, {
+        id,
+        title: body.title || "Brainstorm",
+        status: "active",
+        contributions: [],
+        createdAt: now,
+        updatedAt: now,
+      });
+      console.log("brainstorm: created", id, "—", brainstorms.get(id).title);
+      return json(res, 200, { id });
+    }
+
+    if (req.method === "POST" && p === "/api/brainstorms/active/end") {
+      const b = activeBrainstorm();
+      if (b) { b.status = "ended"; b.updatedAt = Date.now(); console.log("brainstorm: ended", b.id); }
+      return json(res, 200, { ok: true });
+    }
+
+    if (req.method === "POST" && p === "/api/brainstorms/active/contribute") {
+      const body = await readJson(req);
+      const b = activeBrainstorm();
+      if (!b) return json(res, 409, { error: "no active brainstorm" });
+      const text = body.text || (body.audioB64
+        ? await transcribe(Buffer.from(body.audioB64, "base64"), "contribution.m4a", body.audioType || "audio/m4a")
+        : "");
+      const contributionId = "c_" + Date.now().toString(36);
+      b.contributions.push({
+        id: contributionId,
+        text,
+        imageB64: body.imageB64 || null,
+        mode: "inject",
+        at: Date.now(),
+      });
+      b.updatedAt = Date.now();
+      console.log("brainstorm: contribution", contributionId, "->", b.id,
+        (body.imageB64 ? "[+photo] " : ""), JSON.stringify((text || "").slice(0, 200)));
+      return json(res, 200, { ok: true, contributionId });
+    }
+
+    {
+      const m = p.match(/^\/api\/brainstorms\/([^/]+)\/contributions$/);
+      if (req.method === "GET" && m) {
+        const b = brainstorms.get(m[1]);
+        if (!b) return json(res, 404, { error: "no such brainstorm" });
+        const since = Number(url.searchParams.get("since") || 0) || 0;
+        return json(res, 200, { contributions: b.contributions.filter(c => c.at > since) });
+      }
     }
 
     if (req.method === "POST" && p === "/api/ask-text") {
@@ -258,7 +389,9 @@ const server = http.createServer(async (req, res) => {
       if (!filePath.startsWith(__dirname)) { res.writeHead(403); return res.end("forbidden"); }
       return fs.readFile(filePath, (err, content) => {
         if (err) { res.writeHead(404, { "Content-Type": "text/html" }); return res.end("<h1>404</h1>"); }
-        res.writeHead(200, { "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream" });
+        // no-store: this is a fast-iterating demo app — never let the browser serve a stale
+        // ambient.js/index.html, or UI fixes silently won't show up after a plain reload.
+        res.writeHead(200, { "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream", "Cache-Control": "no-store" });
         res.end(content);
       });
     }
@@ -273,7 +406,9 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log("wiser ambient-webapp on http://localhost:" + PORT);
   console.log("  Groq key:", !!process.env.GROQ_API_KEY, " Anthropic key:", !!process.env.ANTHROPIC_API_KEY);
-  console.log("  scan model:", SCAN_MODEL, " stt:", STT_MODEL, " agent proxy ->", FIREBASE_BASE_URL);
+  const scanModel = SCAN_PROVIDER === "nemotron" ? NEMOTRON_SCAN_MODEL : SCAN_MODEL;
+  console.log("  scan provider:", SCAN_PROVIDER, " scan model:", scanModel, " stt:", STT_MODEL, " agent proxy ->", FIREBASE_BASE_URL);
+  console.log("  Nebius key:", !!process.env.NEBIUS_API_KEY);
 });
 
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e));

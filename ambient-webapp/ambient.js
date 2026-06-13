@@ -31,6 +31,8 @@
     opps: [],                    // [{ opp }] — pending opportunities, not yet approved/rejected
     idx: 0,                      // which pending card is shown (one at a time; newest by default)
     resultSeq: 0,
+    brainstormId: null,          // server-side live brainstorm the glasses contribute into
+    contribSince: 0,             // high-water mark (max contribution .at) we've pulled
   };
 
   /* ---------- boot ---------- */
@@ -71,6 +73,22 @@
     if (els.transcript.querySelector(".transcript-empty")) els.transcript.innerHTML = "";
     recordSegment();
     state.scanTimer = setInterval(maybeScan, SCAN_INTERVAL_MS);
+
+    // Open a server-side brainstorm so the glasses can contribute voice+photo into it.
+    // Best-effort: if this fails the local browser brainstorm still works.
+    (async function () {
+      try {
+        var res = await fetch(BACKEND + "/api/brainstorms", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Brainstorm " + new Date().toLocaleTimeString() }),
+        });
+        var data = await res.json();
+        if (data && data.id) { state.brainstormId = data.id; state.contribSince = 0; }
+      } catch (e) {
+        console.warn("brainstorm create failed (local-only mode):", e);
+      }
+    })();
   }
 
   function stop() {
@@ -80,6 +98,11 @@
     if (state.stream) { state.stream.getTracks().forEach(function (t) { t.stop(); }); state.stream = null; }
     els.toggle.textContent = "Start listening";
     setStatus("", "idle");
+    // Best-effort: close the server-side brainstorm.
+    if (state.brainstormId) {
+      fetch(BACKEND + "/api/brainstorms/active/end", { method: "POST" }).catch(function () {});
+      state.brainstormId = null;
+    }
   }
 
   // Rolling segments: each MediaRecorder run produces ONE self-contained blob
@@ -137,11 +160,55 @@
     els.transcript.scrollTop = els.transcript.scrollHeight;
   }
 
+  // Render a glasses contribution in the transcript pane so there's visible on-screen
+  // confirmation. It still feeds the scan separately; this is purely for the human.
+  function appendContribution(text, hasImage) {
+    if (els.transcript.querySelector(".transcript-empty")) els.transcript.innerHTML = "";
+    var prev = els.transcript.querySelector(".t-line.latest");
+    if (prev) prev.classList.remove("latest");
+    var n = document.createElement("div");
+    n.className = "t-line latest t-contrib";
+    n.style.color = "#86e3d6"; // accent — stands out from the ambient mic transcript
+    n.textContent = "👓 " + (hasImage ? "glasses (+ photo): " : "glasses: ") + (text || "(photo only)");
+    els.transcript.appendChild(n);
+    els.transcript.scrollTop = els.transcript.scrollHeight;
+  }
+
   /* ---------- scanner ---------- */
   async function maybeScan() {
     if (!state.listening || state.scanInFlight) return;
-    if (state.transcript.length === state.lastScanLen) return; // no growth → don't spam the model
-    if (state.transcript.trim().length < 40) return;           // too little to judge
+
+    // Pull any new contributions the glasses pushed into the active brainstorm.
+    var contribTexts = [], contribImage = null;
+    if (state.brainstormId) {
+      try {
+        var cres = await fetch(BACKEND + "/api/brainstorms/" + state.brainstormId +
+          "/contributions?since=" + state.contribSince);
+        if (cres.ok) {
+          var cdata = await cres.json();
+          var contribs = (cdata && cdata.contributions) || [];
+          if (contribs.length) {
+            contribTexts = contribs.map(function (c) { return c.text; }).filter(Boolean);
+            // Show each new glasses contribution on screen right away.
+            contribs.forEach(function (c) {
+              if (c.text || c.imageB64) appendContribution(c.text, !!c.imageB64);
+            });
+            // use the LAST contribution that carries a photo
+            for (var i = contribs.length - 1; i >= 0; i--) {
+              if (contribs[i].imageB64) { contribImage = contribs[i].imageB64; break; }
+            }
+            var maxAt = contribs.reduce(function (m, c) { return Math.max(m, c.at || 0); }, state.contribSince);
+            state.contribSince = Math.max(state.contribSince, maxAt);
+          }
+        }
+      } catch (e) { console.warn("contributions fetch failed:", e); }
+    }
+
+    var hasNewContribs = contribTexts.length > 0 || !!contribImage;
+    // Skip only when there's nothing new to look at: no transcript growth AND no
+    // fresh contribution. (A glasses contribution can drive a scan on its own.)
+    if (state.transcript.length === state.lastScanLen && !hasNewContribs) return;
+    if (state.transcript.trim().length < 40 && !hasNewContribs) return; // too little to judge
     state.scanInFlight = true;
     state.lastScanLen = state.transcript.length;
     state.scans++;
@@ -150,7 +217,12 @@
       var res = await fetch(BACKEND + "/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: state.transcript, proposed: state.proposed }),
+        body: JSON.stringify({
+          transcript: state.transcript,
+          proposed: state.proposed,
+          contributions: contribTexts,
+          imageB64: contribImage,
+        }),
       });
       if (!res.ok) { noteScan("scan HTTP " + res.status); return; }
       var data = await res.json();
