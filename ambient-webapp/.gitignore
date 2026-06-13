@@ -1,3 +1,7 @@
 node_modules/
 .env
 *.log
+
+# brainstorm target repo (pulled in at runtime) + per-prototype fleet output
+linny-base/
+prototypes/

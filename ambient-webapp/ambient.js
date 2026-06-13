@@ -228,9 +228,9 @@
       var data = await res.json();
       if (data && data.opportunity) {
         var surfaced = offerOpportunity(data.opportunity);
-        noteScan(surfaced ? "✦ opportunity surfaced" : "· already proposed");
+        noteScan(surfaced ? "✦ prototype — approve to build" : "· already proposed");
       } else {
-        noteScan("· nothing actionable yet");
+        noteScan("· nothing buildable yet");
       }
     } catch (e) {
       console.error("scan failed:", e);
@@ -248,8 +248,10 @@
     state.seen[key] = true;
     // remember it so the scanner won't re-propose this (or anything overlapping)
     state.proposed.push({ title: opp.title, proposedPrompt: opp.proposedPrompt });
+    // Surface it as a PENDING card for approval — do NOT auto-build. Nothing hits
+    // /api/build until the user approves (→), edits-then-sends (⏎). ← rejects it.
     state.opps.push({ opp: opp });
-    state.idx = state.opps.length - 1;    // jump to the newest ("show the last")
+    state.idx = state.opps.length - 1;   // show the newest
     renderDeck();
     return true;
   }
@@ -308,26 +310,50 @@
     openEditor(entry.opp.proposedPrompt, function (text) { dispatch(text, entry.opp.title); removeEntry(entry, "right"); });
   }
 
-  /* ---------- dispatch to the agent fleet (via the backend proxy) ---------- */
+  /* ---------- dispatch to the coding-agent fleet (builds a previewable prototype) ---------- */
   async function dispatch(prompt, title) {
     var id = "r" + (++state.resultSeq);
-    var card = renderResult({ id: id, title: title || firstWords(prompt), status: "working", line: "dispatching to the fleet…" });
+    var card = renderResult({ id: id, title: title || firstWords(prompt), status: "working", line: "spinning up a coding agent on linny…" });
     els.results.insertBefore(card, els.results.firstChild);
     try {
-      var res = await fetch(BACKEND + "/api/ask-text", {
+      var res = await fetch(BACKEND + "/api/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: prompt }),
+        body: JSON.stringify({ prompt: prompt, title: title }),
       });
       var data = await res.json();
       if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
-      var head = (data.card && data.card.title) || title || firstWords(prompt);
-      var line = data.answer || (data.card && data.card.summary) || "done";
-      updateResult(id, { title: head, status: "done", line: line });
+      pollBuild(id, data.id);
     } catch (e) {
-      console.error("dispatch failed:", e);
+      console.error("build dispatch failed:", e);
       updateResult(id, { title: title || firstWords(prompt), status: "failed", line: (e && e.message) || "failed" });
     }
+  }
+
+  // Poll the fleet build until it's done/failed; the card resolves to a live localhost preview link.
+  function pollBuild(cardId, buildId) {
+    var tries = 0;
+    var iv = setInterval(async function () {
+      tries++;
+      try {
+        var res = await fetch(BACKEND + "/api/builds/" + buildId);
+        if (res.ok) {
+          var b = await res.json();
+          if (b.status === "building") {
+            updateResult(cardId, { title: b.title, status: "working", line: b.line || "building…" });
+          } else {
+            clearInterval(iv);
+            updateResult(cardId, {
+              title: b.title,
+              status: b.status === "done" ? "done" : "failed",
+              line: b.line || b.status,
+              previewUrl: b.status === "done" ? b.previewUrl : null,
+            });
+          }
+        }
+      } catch (e) { /* transient — keep polling */ }
+      if (tries > 200) { clearInterval(iv); updateResult(cardId, { status: "failed", line: "build timed out" }); }
+    }, 2000);
   }
 
   // result card — built from the .card primitives so it matches the theme
@@ -348,10 +374,26 @@
   function updateResult(id, r) {
     var node = document.getElementById("res-" + id);
     if (!node) return;
-    node.style.setProperty("--card-accent", accentFor(r.status));
-    node.querySelector(".card-icon").textContent = iconFor(r.status);
-    node.querySelector(".explain-head").textContent = r.title;
-    node.querySelector(".card-line").textContent = r.line;
+    if (r.status) {
+      node.style.setProperty("--card-accent", accentFor(r.status));
+      node.querySelector(".card-icon").textContent = iconFor(r.status);
+    }
+    if (r.title) node.querySelector(".explain-head").textContent = r.title;
+    if (r.line != null) node.querySelector(".card-line").textContent = r.line;
+    if (r.previewUrl) {
+      var body = node.querySelector(".card-body");
+      var link = node.querySelector(".card-preview");
+      if (!link) {
+        link = W.el("a", "card-preview", "Open preview ↗");
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.style.cssText =
+          "display:inline-block;margin-top:10px;color:var(--success,#86e3d6);text-decoration:none;" +
+          "font-weight:600;font-size:13px;border:1px solid currentColor;border-radius:999px;padding:4px 12px;";
+        body.appendChild(link);
+      }
+      link.href = (BACKEND || "") + r.previewUrl;
+    }
   }
   function accentFor(s) { return s === "failed" ? "var(--danger)" : s === "done" ? "var(--success)" : "var(--accent)"; }
   function iconFor(s) { return s === "failed" ? "✗" : s === "done" ? "✓" : "⟳"; }
