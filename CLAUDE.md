@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⭐ CARDINAL RULE: glasses-first (non-negotiable)
+
+**Every user-facing feature must work on the Meta Ray-Ban Display glasses themselves — rendered on the
+lens via the Meta Wearables DAT SDK (`MWDATDisplay`) and driven by Neural Band gestures — before it counts
+as done. The glasses are the product. A phone-only iOS screen is NOT a deliverable: UI that only renders
+on the phone is useless here.**
+
+When you build anything the user interacts with or sees:
+- Render it on the lens with `MWDATDisplay` (`display.send(FlexBox { … })`); navigate/confirm with the
+  Neural Band (`Button(onClick:)`, `FlexBox.onTap`, focus = first focusable child).
+- The phone app may hold logic, secrets, networking, and state — but the **interaction and output happen
+  on the glasses**, not the phone screen.
+- Don't consider a feature finished because the iOS app compiles or shows it on the phone. It must be on
+  the lens.
+
+If it's not on the glasses, it's not done.
+
 ## Core thesis (north star)
 
 **What does the world look like when you can have coding agents in front of you at any moment — without it
