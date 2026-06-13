@@ -333,6 +333,71 @@ body > #stage {
              box-shadow: 0 0 40px var(--glow); transition: transform .2s, box-shadow .2s; }
 .start-btn:hover, .start-btn:focus { outline: none; transform: scale(1.03); box-shadow: 0 0 60px var(--glow); }
 
+/* ───────────── HOME · Sessions overview + Mission glance ───────────── */
+.home { position: absolute; inset: 0; padding: 26px; display: flex; flex-direction: column; gap: 14px;
+        animation: dreamIn .4s ease; }
+.mc-strip { display: flex; gap: 10px; }
+.mc-stat { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+           padding: 12px 6px; text-align: center; }
+.mc-stat.pulse { box-shadow: 0 0 18px var(--glow); border-color: color-mix(in srgb, var(--attn) 40%, var(--line)); }
+.mc-v { font-family: var(--font-mono); font-size: 30px; font-weight: 700; line-height: 1; }
+.mc-l { font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-top: 5px; }
+.mc-sub { color: var(--muted); font-family: var(--font-mono); font-size: 13px; text-align: center; margin-top: -4px; }
+.sess-list { display: flex; flex-direction: column; gap: 9px; overflow-y: auto; flex: 1; padding: 2px; }
+.sess-row { display: flex; align-items: center; gap: 14px; padding: 13px 16px; cursor: pointer;
+            background: var(--card); border: 2px solid transparent; border-radius: 16px; }
+.sess-row:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 18px var(--glow); }
+.sess-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.sess-dot.pulse { animation: breathe 2.4s ease-in-out infinite; }
+.sess-dot.plus { width: auto; height: auto; border-radius: 0; color: var(--accent); font-size: 22px; line-height: 1; }
+.sess-row.new { background: transparent; border-style: dashed; border-color: var(--line); }
+.sess-main { flex: 1; min-width: 0; }
+.sess-task { font-size: 21px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess-meta { font-size: 13px; color: var(--muted); font-family: var(--font-mono); margin-top: 3px;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess-res { text-align: right; flex: none; }
+.sess-res-v { font-family: var(--font-mono); font-size: 19px; font-weight: 700; color: var(--accent); }
+.sess-res-c { font-family: var(--font-mono); font-size: 13px; color: var(--gold); margin-top: 2px; }
+
+/* ───────────── GOALS · progression / steps ───────────── */
+.goals { position: absolute; inset: 0; background: var(--bg); padding: 18px;
+         display: flex; flex-direction: column; gap: 14px; z-index: 5; animation: dreamIn .35s ease; }
+.goals-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding-right: 2px; }
+.goal-title { font-size: 23px; font-weight: 600; line-height: 1.15; letter-spacing: -.3px; }
+.goal-overall { display: flex; align-items: center; gap: 12px; }
+.goal-track { flex: 1; height: 9px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
+.goal-track i { display: block; height: 100%; border-radius: 999px;
+                background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .6s; }
+.goal-pct { font-family: var(--font-mono); font-size: 17px; font-weight: 700; color: var(--accent); }
+.block-l { font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 9px; }
+.attempts { display: flex; flex-direction: column; gap: 8px; }
+.attempt { display: flex; align-items: baseline; gap: 11px; }
+.attempt-ic { font-family: var(--font-mono); font-size: 17px; width: 18px; text-align: center; flex: none; }
+.attempt-ic.pulse { animation: breathe 2.4s ease-in-out infinite; }
+.attempt-tx { font-size: 15px; color: var(--text); }
+.subgoal { display: grid; grid-template-columns: 1fr 120px 42px; align-items: center; gap: 10px; margin-bottom: 9px; }
+.subgoal-lab { font-size: 15px; }
+.subgoal-track { height: 7px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
+.subgoal-track i { display: block; height: 100%; border-radius: 999px; background: var(--accent2); }
+.subgoal-track i.full { background: var(--success); }
+.subgoal-pct { font-family: var(--font-mono); font-size: 13px; color: var(--muted); text-align: right; }
+.dod-row { display: flex; align-items: center; gap: 11px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.dod-ic { font-family: var(--font-mono); color: #4a5163; width: 16px; text-align: center; }
+.dod-row.done .dod-ic { color: var(--success); }
+.dod-row.done .dod-tx { color: var(--text); }
+.dod-tx { font-size: 15px; color: var(--muted); }
+
+/* ───────────── TEAM · MetaLoop fan-out (best-of-N) ───────────── */
+.cand-list { display: flex; flex-direction: column; gap: 9px; margin-top: 4px; }
+.cand { display: flex; align-items: center; gap: 13px; padding: 12px 15px; cursor: pointer;
+        background: var(--card); border: 2px solid transparent; border-radius: 14px; }
+.cand:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 18px var(--glow); }
+.cand.lead { background: color-mix(in srgb, var(--success) 10%, var(--card)); }
+.cand-lab { font-size: 18px; font-weight: 600; }
+.cand.lead .cand-lab { color: var(--success); }
+.cand-score { font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: var(--accent); flex: none; }
+.cand.lead .cand-score { color: var(--success); }
+
 /* ───────────── animations ───────────── */
 @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
 @keyframes cardIn { from { opacity: 0; transform: translateY(14px) scale(.98); filter: blur(6px); } to { opacity: 1; transform: none; filter: blur(0); } }

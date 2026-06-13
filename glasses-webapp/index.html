@@ -18,6 +18,27 @@
   <div id="stage">
     <div id="app" class="surface">
 
+      <!-- ─────────── HOME: Sessions overview + Mission-Control glance (root) ─────────── -->
+      <div id="home" class="home hidden"><!-- built by app.js --></div>
+
+      <!-- ─────────── TEAM: MetaLoop zoom-out — the fan-out racing the goal ─────────── -->
+      <div id="team" class="goals hidden">
+        <div class="detail-head">
+          <button class="back-btn focusable" data-action="team-back" tabindex="0">↓</button>
+          <span id="team-title">Team</span>
+        </div>
+        <div id="team-body" class="goals-body"></div>
+      </div>
+
+      <!-- ─────────── GOALS: per-session goal progression / steps ─────────── -->
+      <div id="goals" class="goals hidden">
+        <div class="detail-head">
+          <button class="back-btn focusable" data-action="goals-back" tabindex="0">←</button>
+          <span id="goals-task">Goal</span>
+        </div>
+        <div id="goals-body" class="goals-body"></div>
+      </div>
+
       <!-- ─────────── AMBIENT: calm by default. Just the target + progress. ─────────── -->
       <div id="ambient" class="ambient hidden">
         <div class="task-row">
@@ -74,8 +95,8 @@
         <div class="voice-hint"><kbd>⏎</kbd> accept · <kbd>⎋</kbd> skip</div>
       </div>
 
-      <!-- ─────────── START (idle) ─────────── -->
-      <div id="start" class="start">
+      <!-- ─────────── START (idle — legacy; home is the root now) ─────────── -->
+      <div id="start" class="start hidden">
         <div class="start-mark">wiser</div>
         <div class="start-sub">steer the fleet, hands-free</div>
         <button class="start-btn focusable" data-action="start" tabindex="0">⏎ start the loop</button>
@@ -90,6 +111,7 @@
   <script src="contract.js"></script>
   <script src="cards.js"></script>
   <script src="mock.js"></script>
+  <script src="mock-fleet.js"></script>
   <script src="session.js"></script>
   <script src="app.js"></script>
 </body>
