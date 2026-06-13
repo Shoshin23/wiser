@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-lens.mp4"><img src="media/wiser-demo-lens.gif" width="640" alt="wiser — the real through-the-lens view: agent cards floating in your field of view"></a>
+<a href="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4"><img src="media/wiser-demo-bg.gif" width="640" alt="wiser — the lens, in your field of view: a fleet of coding agents floating in the room"></a>
 
 # wiser
 
@@ -8,7 +8,7 @@
 
 *Voice-driven Claude agents, surfaced as glanceable cards on Meta Ray-Ban Display glasses.*
 
-<sub>↑ the real through-the-lens view · <a href="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-lens.mp4">watch / download the MP4</a></sub>
+<sub>↑ the lens, in your field of view · <a href="https://github.com/Shoshin23/wiser/raw/main/media/wiser-demo-glasses.mp4">watch / download the MP4</a></sub>
 
 </div>
 
